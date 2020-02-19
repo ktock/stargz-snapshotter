@@ -25,6 +25,7 @@ import (
 	"github.com/containerd/containerd/mount"
 	"github.com/containerd/containerd/snapshots"
 	ptypes "github.com/gogo/protobuf/types"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 var empty = &ptypes.Empty{}
@@ -161,6 +162,41 @@ func (s service) Usage(ctx context.Context, ur *snapshotsapi.UsageRequest) (*sna
 		Inodes: usage.Inodes,
 		Size_:  usage.Size,
 	}, nil
+}
+
+func (s service) Cleanup(ctx context.Context, cr *snapshotsapi.CleanupRequest) (*ptypes.Empty, error) {
+	c, ok := s.sn.(snapshots.Cleaner)
+	if !ok {
+		return nil, errdefs.ToGRPCf(errdefs.ErrNotImplemented, "snapshotter does not implement Cleanup method")
+	}
+
+	if err := c.Cleanup(ctx); err != nil {
+		return nil, errdefs.ToGRPC(err)
+	}
+
+	return empty, nil
+}
+
+func (s service) Annotate(ctx context.Context, ar *snapshotsapi.AnnotateRequest) (*snapshotsapi.AnnotateResponse, error) {
+	a, ok := s.sn.(snapshots.Annotator)
+	if !ok {
+		return nil, errdefs.ToGRPCf(errdefs.ErrNotImplemented, "snapshotter does not implement Annotate method")
+	}
+	annotations, err := a.Annotate(ctx, toDescriptor(ar.Desc))
+	if err != nil {
+		return nil, errdefs.ToGRPC(err)
+	}
+
+	return &snapshotsapi.AnnotateResponse{Annotations: annotations}, nil
+}
+
+func toDescriptor(d *types.Descriptor) ocispec.Descriptor {
+	return ocispec.Descriptor{
+		MediaType:   d.MediaType,
+		Digest:      d.Digest,
+		Size:        d.Size_,
+		Annotations: d.Annotations,
+	}
 }
 
 func fromKind(kind snapshots.Kind) snapshotsapi.Kind {

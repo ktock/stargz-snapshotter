@@ -32,6 +32,7 @@ import (
 	"github.com/containerd/containerd/snapshots"
 	"github.com/containerd/containerd/snapshots/storage"
 	"github.com/containerd/containerd/snapshots/testsuite"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 const (
@@ -415,6 +416,10 @@ func (fs *bindFs) Check(ctx context.Context, mountpoint string) error {
 	return nil
 }
 
+func (fs *bindFs) Annotate(ctx context.Context, desc ocispec.Descriptor) (map[string]string, error) {
+	return nil, nil
+}
+
 func dummyFileSystem() FileSystem { return &dummyFs{} }
 
 type dummyFs struct{}
@@ -425,6 +430,10 @@ func (fs *dummyFs) Mount(ctx context.Context, mountpoint string, labels map[stri
 
 func (fs *dummyFs) Check(ctx context.Context, mountpoint string) error {
 	return fmt.Errorf("dummy")
+}
+
+func (fs *dummyFs) Annotate(ctx context.Context, desc ocispec.Descriptor) (map[string]string, error) {
+	return nil, nil
 }
 
 // =============================================================================

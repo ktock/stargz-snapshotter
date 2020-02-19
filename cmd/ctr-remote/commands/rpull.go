@@ -25,7 +25,6 @@ import (
 	"github.com/containerd/containerd/cmd/ctr/commands/content"
 	"github.com/containerd/containerd/images"
 	"github.com/containerd/containerd/log"
-	stargz "github.com/ktock/stargz-snapshotter/stargz/handler"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/urfave/cli"
 )
@@ -94,7 +93,6 @@ func pull(ctx context.Context, client *containerd.Client, ref string, config *co
 		containerd.WithSchema1Conversion,
 		containerd.WithPullUnpack,
 		containerd.WithPullSnapshotter(remoteSnapshotterName),
-		containerd.WithImageHandlerWrapper(stargz.AppendInfoHandlerWrapper(ref)),
 	}...); err != nil {
 		return err
 	}

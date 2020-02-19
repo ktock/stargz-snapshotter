@@ -48,6 +48,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -64,10 +65,10 @@ import (
 	"github.com/hanwen/go-fuse/fuse/nodefs"
 	"github.com/ktock/stargz-snapshotter/cache"
 	snbase "github.com/ktock/stargz-snapshotter/snapshot"
-	"github.com/ktock/stargz-snapshotter/stargz/handler"
 	"github.com/ktock/stargz-snapshotter/stargz/reader"
 	"github.com/ktock/stargz-snapshotter/stargz/remote"
 	"github.com/ktock/stargz-snapshotter/task"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"golang.org/x/sys/unix"
 )
 
@@ -79,6 +80,11 @@ const (
 	opaqueXattr       = "trusted.overlay.opaque"
 	opaqueXattrValue  = "y"
 	stateDirName      = ".stargz-snapshotter"
+
+	targetRefLabel    = "containerd.io/snapshot/remote/stargz.reference"
+	targetDigestLabel = "containerd.io/snapshot/remote/stargz.digest"
+	targetSizeLabel   = "containerd.io/snapshot/remote/stargz.size"
+	annotationRefName = "containerd.io/unpacker/ref.name"
 
 	defaultHTTPCacheChunkSize = 50000
 	defaultLRUCacheEntry      = 5000
@@ -183,15 +189,25 @@ func (fs *filesystem) Mount(ctx context.Context, mountpoint string, labels map[s
 	defer fs.backgroundTaskManager.DonePrioritizedTask()
 
 	// Get basic information of this layer.
-	ref, ok := labels[handler.TargetRefLabel]
+	ref, ok := labels[targetRefLabel]
 	if !ok {
 		log.G(ctx).Debug("reference hasn't been passed")
 		return fmt.Errorf("reference hasn't been passed")
 	}
-	digest, ok := labels[handler.TargetDigestLabel]
+	digest, ok := labels[targetDigestLabel]
 	if !ok {
 		log.G(ctx).WithField("ref", ref).Debug("digest hasn't been passed")
 		return fmt.Errorf("digest hasn't been passed")
+	}
+	sizeLabel, ok := labels[targetSizeLabel]
+	if !ok {
+		log.G(ctx).WithField("ref", ref).Debug("size hasn't been passed")
+		return fmt.Errorf("size hasn't been passed")
+	}
+	size, err := strconv.ParseInt(sizeLabel, 10, 64)
+	if err != nil {
+		log.G(ctx).WithError(err).WithField("ref", ref).Debug("failed to parse size")
+		return fmt.Errorf("failed to parse size: %v", err)
 	}
 
 	// Authenticate to the registry using ~/.docker/config.json.
@@ -204,9 +220,10 @@ func (fs *filesystem) Mount(ctx context.Context, mountpoint string, labels map[s
 	}
 
 	// Make and register a reader for the remote blob of this layer.
-	ur, size, err := remote.NewURLReaderAt(
+	ur, err := remote.NewURLReaderAt(
 		url,
 		tr,
+		size,
 		fs.httpCacheChunkSize,
 		fs.httpCache,
 		fs.layerValidInterval)
@@ -350,6 +367,19 @@ func (fs *filesystem) Check(ctx context.Context, mountpoint string) error {
 	}
 
 	return nil
+}
+
+func (fs *filesystem) Annotate(ctx context.Context, desc ocispec.Descriptor) (map[string]string, error) {
+	ref, ok := desc.Annotations[annotationRefName]
+	if !ok {
+		log.G(ctx).WithField("desc", desc.Digest).Debug("reference not passed")
+		return nil, fmt.Errorf("reference not passed")
+	}
+	return map[string]string{
+		targetRefLabel:    ref,
+		targetDigestLabel: desc.Digest.String(),
+		targetSizeLabel:   fmt.Sprintf("%d", desc.Size),
+	}, nil
 }
 
 func (fs *filesystem) unregisterRemote(mountpoint string) {

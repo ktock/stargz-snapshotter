@@ -31,6 +31,7 @@ import (
 	"github.com/containerd/containerd/snapshots"
 	"github.com/containerd/containerd/snapshots/storage"
 	"github.com/containerd/continuity/fs"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
 )
 
@@ -49,6 +50,7 @@ const (
 type FileSystem interface {
 	Mount(ctx context.Context, mountpoint string, labels map[string]string) error
 	Check(ctx context.Context, mountpoint string) error
+	Annotate(ctx context.Context, desc ocispec.Descriptor) (map[string]string, error)
 }
 
 // SnapshotterConfig is used to configure the remote snapshotter instance
@@ -340,6 +342,10 @@ func (o *snapshotter) Walk(ctx context.Context, fn snapshots.WalkFunc, fs ...str
 func (o *snapshotter) Cleanup(ctx context.Context) error {
 	const cleanupCommitted = false
 	return o.cleanup(ctx, cleanupCommitted)
+}
+
+func (o *snapshotter) Annotate(ctx context.Context, desc ocispec.Descriptor) (map[string]string, error) {
+	return o.fs.Annotate(ctx, desc)
 }
 
 func (o *snapshotter) cleanup(ctx context.Context, cleanupCommitted bool) error {

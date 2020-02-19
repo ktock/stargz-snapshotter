@@ -42,11 +42,7 @@ import (
 
 var contentRangeRegexp = regexp.MustCompile(`bytes ([0-9]+)-([0-9]+)/([0-9]+|\\*)`)
 
-func NewURLReaderAt(url string, tr http.RoundTripper, chunkSize int64, cache cache.BlobCache, checkInterval time.Duration) (*URLReaderAt, int64, error) {
-	size, err := getSize(url, tr)
-	if err != nil {
-		return nil, 0, fmt.Errorf("failed to get layer size information for %s: %v", url, err)
-	}
+func NewURLReaderAt(url string, tr http.RoundTripper, size int64, chunkSize int64, cache cache.BlobCache, checkInterval time.Duration) (*URLReaderAt, error) {
 	return &URLReaderAt{
 		url:           url,
 		t:             tr,
@@ -55,7 +51,7 @@ func NewURLReaderAt(url string, tr http.RoundTripper, chunkSize int64, cache cac
 		cache:         cache,
 		lastCheck:     time.Now(),
 		checkInterval: checkInterval,
-	}, size, nil
+	}, nil
 }
 
 type URLReaderAt struct {
@@ -365,24 +361,4 @@ func floor(n int64, unit int64) int64 {
 
 func ceil(n int64, unit int64) int64 {
 	return (n/unit + 1) * unit
-}
-
-func getSize(url string, tr http.RoundTripper) (int64, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	req, err := http.NewRequest("HEAD", url, nil)
-	if err != nil {
-		return 0, err
-	}
-	req = req.WithContext(ctx)
-	req.Close = false
-	res, err := tr.RoundTrip(req)
-	if err != nil {
-		return 0, err
-	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("failed HEAD request with code %v", res.StatusCode)
-	}
-	return strconv.ParseInt(res.Header.Get("Content-Length"), 10, 64)
 }
