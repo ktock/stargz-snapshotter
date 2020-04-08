@@ -21,7 +21,7 @@ RUN apt-get update -y && \
     git clone https://github.com/ktock/containerd \
               $GOPATH/src/github.com/containerd/containerd && \
     cd $GOPATH/src/github.com/containerd/containerd && \
-    git checkout 7b2ddf1589694a52f5df5ff351bd2764fb1d0a3a && \
+    git checkout c528f3a1711b39b98f7e3da9a624f6a610b9c2d6 && \
     GO111MODULE=off make && DESTDIR=/out/ make install
 
 # build stargz snapshotter
