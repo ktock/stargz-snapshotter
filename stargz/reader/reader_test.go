@@ -101,8 +101,8 @@ func (br *breakReaderAt) ReadAt(p []byte, off int64) (int, error) {
 
 type nopCache struct{}
 
-func (nc *nopCache) Fetch(blobHash string) ([]byte, error) {
-	return nil, fmt.Errorf("Missed cache: %q", blobHash)
+func (nc *nopCache) Fetch(blobHash string, p []byte) (int, error) {
+	return 0, fmt.Errorf("Missed cache: %q", blobHash)
 }
 
 func (nc *nopCache) Add(blobHash string, p []byte) {}
@@ -113,15 +113,15 @@ type testCache struct {
 	mu     sync.Mutex
 }
 
-func (tc *testCache) Fetch(blobHash string) ([]byte, error) {
+func (tc *testCache) Fetch(blobHash string, p []byte) (int, error) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 
 	cache, ok := tc.membuf[blobHash]
 	if !ok {
-		return nil, fmt.Errorf("Missed cache: %q", blobHash)
+		return 0, fmt.Errorf("Missed cache: %q", blobHash)
 	}
-	return []byte(cache), nil
+	return copy(p, cache), nil
 }
 
 func (tc *testCache) Add(blobHash string, p []byte) {
@@ -220,8 +220,9 @@ func TestFileReadAt(t *testing.T) {
 								if !ok {
 									break
 								}
-								data, err := f.cache.Fetch(genID(f.digest, ce.ChunkOffset, ce.ChunkSize))
-								if err != nil || len(data) != int(ce.ChunkSize) {
+								data := make([]byte, ce.ChunkSize)
+								n, err := f.cache.Fetch(genID(f.digest, ce.ChunkOffset, ce.ChunkSize), data)
+								if err != nil || n != int(ce.ChunkSize) {
 									t.Errorf("missed cache of offset=%d, size=%d: %v(got size=%d)", ce.ChunkOffset, ce.ChunkSize, err, n)
 									return
 								}

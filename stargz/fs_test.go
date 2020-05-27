@@ -62,7 +62,7 @@ func TestCheck(t *testing.T) {
 	bb := &breakBlob{}
 	fs := &filesystem{
 		layer: map[string]*layer{
-			"test": newLayer(bb, nopreader{}, nil),
+			"test": newLayer(bb, nopreader{}, nil, time.Second),
 		},
 		backgroundTaskManager: task.NewBackgroundTaskManager(1, time.Millisecond),
 	}
@@ -885,7 +885,7 @@ func TestPrefetch(t *testing.T) {
 			if err != nil {
 				t.Fatalf("failed to make stargz reader: %v", err)
 			}
-			l := newLayer(blob, gr, nil)
+			l := newLayer(blob, gr, nil, time.Second)
 			prefetchSize := int64(0)
 			if tt.prefetchSize != nil {
 				prefetchSize = tt.prefetchSize(l)
@@ -966,15 +966,15 @@ type testCache struct {
 	mu     sync.Mutex
 }
 
-func (tc *testCache) Fetch(blobHash string) ([]byte, error) {
+func (tc *testCache) Fetch(blobHash string, p []byte) (int, error) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 
 	cache, ok := tc.membuf[blobHash]
 	if !ok {
-		return nil, fmt.Errorf("Missed cache: %q", blobHash)
+		return 0, fmt.Errorf("Missed cache: %q", blobHash)
 	}
-	return []byte(cache), nil
+	return copy(p, cache), nil
 }
 
 func (tc *testCache) Add(blobHash string, p []byte) {

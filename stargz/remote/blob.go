@@ -62,6 +62,8 @@ type blob struct {
 
 	fetchedRegionSet   regionSet
 	fetchedRegionSetMu sync.Mutex
+
+	resolver *Resolver
 }
 
 func (b *blob) Authn(tr http.RoundTripper) (http.RoundTripper, error) {
@@ -96,10 +98,23 @@ func (b *blob) FetchedSize() int64 {
 }
 
 func (b *blob) Cache(offset int64, size int64, opts ...Option) error {
+	b.fetcherMu.Lock()
+	fr := b.fetcher
+	b.fetcherMu.Unlock()
+
 	fetchReg := region{floor(offset, b.chunkSize), ceil(offset+size-1, b.chunkSize) - 1}
 	discard := make(map[region]io.Writer)
 	b.walkChunks(fetchReg, func(reg region) error {
-		discard[reg] = ioutil.Discard // do not read chunks (only cached)
+		bf := b.resolver.bufPool.Get().(*bytes.Buffer)
+		defer b.resolver.bufPool.Put(bf)
+		bf.Reset()
+		bf.Grow(int(reg.size()))
+		n, err := b.cache.Fetch(fr.genID(reg), bf.Bytes()[:reg.size()])
+		if err != nil || int64(n) != reg.size() {
+			// missed cache, needs to fetch remotely.
+			// but do not read chunks (will be just cached)
+			discard[reg] = ioutil.Discard
+		}
 		return nil
 	})
 	if err := b.fetchRange(discard, opts...); err != nil {
@@ -120,30 +135,67 @@ func (b *blob) ReadAt(p []byte, offset int64, opts ...Option) (int, error) {
 	// Make the buffer chunk aligned
 	allRegion := region{floor(offset, b.chunkSize), ceil(offset+int64(len(p))-1, b.chunkSize) - 1}
 	allData := make(map[region]io.Writer)
+	var putBufs []*bytes.Buffer
+	defer func() {
+		for _, bf := range putBufs {
+			b.resolver.bufPool.Put(bf)
+		}
+	}()
+
+	// Fetcher can be suddenly updated so we take and use the snapshot of it for
+	// consistency.
+	b.fetcherMu.Lock()
+	fr := b.fetcher
+	b.fetcherMu.Unlock()
+
 	var commits []func() error
 	b.walkChunks(allRegion, func(chunk region) error {
 		var (
-			ip          []byte
 			base        = positive(chunk.b - offset)
 			lowerUnread = positive(offset - chunk.b)
 			upperUnread = positive(chunk.e + 1 - (offset + int64(len(p))))
 		)
 		if lowerUnread == 0 && upperUnread == 0 {
-			ip = p[base : base+chunk.size()]
+			ip := p[base : base+chunk.size()]
+			n, err := b.cache.Fetch(fr.genID(chunk), ip)
+			if err != nil || int64(n) != chunk.size() {
+				// missed cache, needs to fetch remotely.
+				allData[chunk] = &byteWriter{
+					p: ip,
+				}
+			}
 		} else {
 			// Use temporally buffer for aligning this chunk
-			ip = make([]byte, chunk.size())
+			var (
+				bf    = b.resolver.bufPool.Get().(*bytes.Buffer)
+				fetch = false
+			)
+			putBufs = append(putBufs, bf)
+			bf.Reset()
+			bf.Grow(int(chunk.size()))
+
+			// Check if the target chunk exists in the cache
+			n, err := b.cache.Fetch(fr.genID(chunk), bf.Bytes()[:chunk.size()])
+			if err != nil || int64(n) != chunk.size() {
+				// missed cache, needs to fetch remotely.
+				bf.Reset()
+				allData[chunk], fetch = bf, true
+			}
+
+			// Function for committing the buffered chunk into the result slice.
 			commits = append(commits, func() error {
-				n := copy(p[base:], ip[lowerUnread:chunk.size()-upperUnread])
-				if int64(n) != chunk.size()-upperUnread-lowerUnread {
+				if fetch && int64(bf.Len()) != chunk.size() {
 					return fmt.Errorf("unexpected data size %d; want %d",
+						bf.Len(), chunk.size())
+				}
+				bb := bf.Bytes()[:chunk.size()]
+				n := copy(p[base:], bb[lowerUnread:chunk.size()-upperUnread])
+				if int64(n) != chunk.size()-upperUnread-lowerUnread {
+					return fmt.Errorf("invalid copied data size %d; want %d",
 						n, chunk.size()-upperUnread-lowerUnread)
 				}
 				return nil
 			})
-		}
-		allData[chunk] = &byteWriter{
-			p: ip,
 		}
 		return nil
 	})
@@ -173,35 +225,22 @@ func (b *blob) ReadAt(p []byte, offset int64, opts ...Option) (int, error) {
 
 // fetchRange fetches all specified chunks from local cache and remote blob.
 func (b *blob) fetchRange(allData map[region]io.Writer, opts ...Option) error {
+	if len(allData) == 0 {
+		return nil
+	}
+
 	// Fetcher can be suddenly updated so we take and use the snapshot of it for
 	// consistency.
 	b.fetcherMu.Lock()
 	fr := b.fetcher
 	b.fetcherMu.Unlock()
 
-	// Read data from cache
-	fetched := make(map[region]bool)
-	for chunk := range allData {
-		data, err := b.cache.Fetch(fr.genID(chunk))
-		if err != nil || int64(len(data)) != chunk.size() {
-			fetched[chunk] = false // missed cache, needs to fetch remotely.
-			continue
-		}
-		if n, err := io.Copy(allData[chunk], bytes.NewReader(data)); err != nil {
-			return err
-		} else if n != chunk.size() {
-			return fmt.Errorf("unexpected cached data size %d; want %d", n, chunk.size())
-		}
-	}
-	if len(fetched) == 0 {
-		// We successfully served whole range from cache
-		return nil
-	}
-
 	// request missed regions
 	var req []region
-	for reg := range fetched {
+	fetched := make(map[region]bool)
+	for reg := range allData {
 		req = append(req, reg)
+		fetched[reg] = false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -224,23 +263,34 @@ func (b *blob) fetchRange(allData map[region]io.Writer, opts ...Option) error {
 			return errors.Wrapf(err, "failed to read multipart resp")
 		}
 		if err := b.walkChunks(reg, func(chunk region) error {
-			data := make([]byte, chunk.size())
-			if _, err := io.ReadFull(p, data); err != nil {
-				return err
+
+			// Prepare the temporary buffer
+			bf := b.resolver.bufPool.Get().(*bytes.Buffer)
+			defer b.resolver.bufPool.Put(bf)
+			bf.Reset()
+			bf.Grow(int(chunk.size()))
+			w := io.Writer(bf)
+
+			// If this chunk is one of the targets, write the content to the
+			// passed reader too.
+			if _, ok := fetched[chunk]; ok {
+				w = io.MultiWriter(w, allData[chunk])
 			}
-			b.cache.Add(fr.genID(chunk), data)
+
+			// Copy the target chunk
+			if _, err := io.CopyN(w, p, chunk.size()); err != nil {
+				return err
+			} else if int64(bf.Len()) != chunk.size() {
+				return fmt.Errorf("unexpected fetched data size %d; want %d",
+					bf.Len(), chunk.size())
+			}
+
+			// Add the target chunk to the cache
+			b.cache.Add(fr.genID(chunk), bf.Bytes()[:chunk.size()])
 			b.fetchedRegionSetMu.Lock()
 			b.fetchedRegionSet.add(chunk)
 			b.fetchedRegionSetMu.Unlock()
-			if _, ok := fetched[chunk]; ok {
-				fetched[chunk] = true
-				if n, err := io.Copy(allData[chunk], bytes.NewReader(data)); err != nil {
-					return errors.Wrap(err, "failed to write chunk to buffer")
-				} else if n != chunk.size() {
-					return fmt.Errorf("unexpected fetched data size %d; want %d",
-						n, chunk.size())
-				}
-			}
+			fetched[chunk] = true
 			return nil
 		}); err != nil {
 			return errors.Wrapf(err, "failed to get chunks")

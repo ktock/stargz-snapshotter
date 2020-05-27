@@ -213,8 +213,9 @@ func checkAllCached(t *testing.T, r *blob, offset, size int64) {
 	cn := 0
 	whole := region{floor(offset, r.chunkSize), ceil(offset+size-1, r.chunkSize) - 1}
 	if err := r.walkChunks(whole, func(reg region) error {
-		data, err := r.cache.Fetch(r.fetcher.genID(reg))
-		if err != nil || int64(len(data)) != reg.size() {
+		data := make([]byte, reg.size())
+		n, err := r.cache.Fetch(r.fetcher.genID(reg), data)
+		if err != nil || int64(n) != reg.size() {
 			return fmt.Errorf("missed cache of region={%d,%d}(size=%d): %v",
 				reg.b, reg.e, reg.size(), err)
 		}
@@ -279,6 +280,13 @@ func makeBlob(t *testing.T, size int64, chunkSize int64, fn RoundTripFunc) *blob
 		size:      size,
 		chunkSize: chunkSize,
 		cache:     &testCache{membuf: map[string]string{}, t: t},
+		resolver: &Resolver{
+			bufPool: sync.Pool{
+				New: func() interface{} {
+					return new(bytes.Buffer)
+				},
+			},
+		},
 	}
 }
 
@@ -288,15 +296,15 @@ type testCache struct {
 	mu     sync.Mutex
 }
 
-func (tc *testCache) Fetch(blobHash string) ([]byte, error) {
+func (tc *testCache) Fetch(blobHash string, p []byte) (int, error) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 
 	cache, ok := tc.membuf[blobHash]
 	if !ok {
-		return nil, fmt.Errorf("Missed cache: %q", blobHash)
+		return 0, fmt.Errorf("Missed cache: %q", blobHash)
 	}
-	return []byte(cache), nil
+	return copy(p, cache), nil
 }
 
 func (tc *testCache) Add(blobHash string, p []byte) {

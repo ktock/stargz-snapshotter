@@ -145,12 +145,13 @@ func digestFor(content string) string {
 func hit(sample string) check {
 	return func(t *testing.T, c BlobCache) {
 		d := digestFor(sample)
-		p, err := c.Fetch(d)
+		p := make([]byte, len(sample))
+		n, err := c.Fetch(d, p)
 		if err != nil {
 			t.Errorf("failed to fetch blob %q: %v", d, err)
 			return
 		}
-		if len(p) != len(sample) {
+		if n != len(sample) {
 			t.Errorf("fetched size %d; want %d", len(p), len(sample))
 			return
 		}
@@ -165,7 +166,8 @@ func hit(sample string) check {
 func miss(sample string) check {
 	return func(t *testing.T, c BlobCache) {
 		d := digestFor(sample)
-		_, err := c.Fetch(d)
+		p := make([]byte, len(sample))
+		_, err := c.Fetch(d, p)
 		if err == nil {
 			t.Errorf("hit blob %q but must be missed: %v", d, err)
 			return

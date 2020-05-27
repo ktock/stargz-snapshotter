@@ -23,6 +23,7 @@
 package remote
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"fmt"
@@ -84,6 +85,11 @@ func NewResolver(keychain authn.Keychain, config ResolverConfig) *Resolver {
 		trPool:    lru.New(poolEntry),
 		keychain:  keychain,
 		config:    config,
+		bufPool: sync.Pool{
+			New: func() interface{} {
+				return new(bytes.Buffer)
+			},
+		},
 	}
 }
 
@@ -93,6 +99,7 @@ type Resolver struct {
 	trPoolMu  sync.Mutex
 	keychain  authn.Keychain
 	config    ResolverConfig
+	bufPool   sync.Pool
 }
 
 func (r *Resolver) Resolve(ref, digest string, cache cache.BlobCache, config BlobConfig) (Blob, error) {
@@ -124,6 +131,7 @@ func (r *Resolver) Resolve(ref, digest string, cache cache.BlobCache, config Blo
 		cache:         cache,
 		lastCheck:     time.Now(),
 		checkInterval: checkInterval,
+		resolver:      r,
 	}, nil
 }
 

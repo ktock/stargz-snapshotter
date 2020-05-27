@@ -17,9 +17,9 @@
 package cache
 
 import (
+	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"sync"
@@ -31,7 +31,7 @@ import (
 // TODO: contents validation.
 
 type BlobCache interface {
-	Fetch(blobHash string) ([]byte, error)
+	Fetch(blobHash string, p []byte) (int, error)
 	Add(blobHash string, p []byte)
 }
 
@@ -59,6 +59,14 @@ func NewDirectoryCache(directory string, memCacheSize int, opts ...DirOption) (B
 	dc := &directoryCache{
 		cache:     lru.New(memCacheSize),
 		directory: directory,
+		bufPool: sync.Pool{
+			New: func() interface{} {
+				return new(bytes.Buffer)
+			},
+		},
+	}
+	dc.cache.OnEvicted = func(_ lru.Key, value interface{}) {
+		dc.bufPool.Put(value)
 	}
 	if opt.syncAdd {
 		dc.syncAdd = true
@@ -73,49 +81,68 @@ type directoryCache struct {
 	directory string
 	syncAdd   bool
 	fileMu    sync.Mutex
+
+	bufPool sync.Pool
 }
 
-func (dc *directoryCache) Fetch(blobHash string) (p []byte, err error) {
+func (dc *directoryCache) Fetch(blobHash string, p []byte) (n int, err error) {
 	dc.cacheMu.Lock()
-	defer dc.cacheMu.Unlock()
-
 	if cache, ok := dc.cache.Get(blobHash); ok {
-		p, ok := cache.([]byte)
-		if ok {
-			return p, nil
-		}
+		n = copy(p, cache.(*bytes.Buffer).Bytes())
+		dc.cacheMu.Unlock()
+		return
 	}
+	dc.cacheMu.Unlock()
 
 	c := filepath.Join(dc.directory, blobHash[:2], blobHash)
-	if _, err := os.Stat(c); err != nil {
-		return nil, errors.Wrapf(err, "Missed cache %q", c)
+	fi, err := os.Stat(c)
+	if err != nil {
+		return 0, errors.Wrapf(err, "Missed cache %q", c)
+	}
+	if fi.Size() != int64(len(p)) {
+		return 0, fmt.Errorf("buffer size is invalid %d; want %d", len(p), fi.Size())
 	}
 
 	file, err := os.Open(c)
 	if err != nil {
-		return nil, errors.Wrapf(err, "Failed to Open cached blob file %q", c)
+		return 0, errors.Wrapf(err, "failed to open blob file %q", c)
 	}
 	defer file.Close()
 
-	if p, err = ioutil.ReadAll(file); err != nil && err != io.EOF {
-		return nil, errors.Wrapf(err, "failed to read cached data %q", c)
+	b := dc.bufPool.Get().(*bytes.Buffer)
+	b.Reset()
+	if n, err = io.ReadFull(io.TeeReader(file, b), p); err != nil && err != io.EOF {
+		return 0, errors.Wrapf(err, "failed to read cached data %q", c)
+	} else if int64(n) != fi.Size() {
+		return 0, fmt.Errorf("failed to copy full contents from cache %d; want %d", n, fi.Size())
 	}
-	dc.cache.Add(blobHash, p)
+	dc.cacheMu.Lock()
+	dc.cache.Add(blobHash, b)
+	dc.cacheMu.Unlock()
 
 	return
 }
 
 func (dc *directoryCache) Add(blobHash string, p []byte) {
 	// Copy the original data for avoiding the cached contents to be edited accidentally
-	p2 := make([]byte, len(p))
-	copy(p2, p)
-	p = p2
+	b := dc.bufPool.Get().(*bytes.Buffer)
+	b.Reset()
+	b.Write(p)
 
 	dc.cacheMu.Lock()
-	dc.cache.Add(blobHash, p)
+	dc.cache.Add(blobHash, b)
 	dc.cacheMu.Unlock()
 
+	// NOTE: We use another buffer for storing the data into the disk. We don't use
+	// the cached buffer (`b`) here because this will possibly be evicted from
+	// cache, be put into the buffer pool, and be used by other goroutines, which
+	// leads to data race.
+	b2 := dc.bufPool.Get().(*bytes.Buffer)
+	b2.Reset()
+	b2.Write(p)
 	addFunc := func() {
+		defer dc.bufPool.Put(b2)
+
 		dc.fileMu.Lock()
 		defer dc.fileMu.Unlock()
 
@@ -136,9 +163,11 @@ func (dc *directoryCache) Add(blobHash string, p []byte) {
 			return
 		}
 		defer f.Close()
-		if n, err := f.Write(p); err != nil || n != len(p) {
+
+		want := b2.Len()
+		if n, err := io.Copy(f, b2); err != nil || n != int64(want) {
 			fmt.Printf("Warning: failed to write cache: %d(wrote)/%d(expected): %v\n",
-				n, len(p), err)
+				n, want, err)
 		}
 	}
 
@@ -161,15 +190,15 @@ type memoryCache struct {
 	mu     sync.Mutex
 }
 
-func (mc *memoryCache) Fetch(blobHash string) ([]byte, error) {
+func (mc *memoryCache) Fetch(blobHash string, p []byte) (int, error) {
 	mc.mu.Lock()
 	defer mc.mu.Unlock()
 
 	cache, ok := mc.membuf[blobHash]
 	if !ok {
-		return nil, fmt.Errorf("Missed cache: %q", blobHash)
+		return 0, fmt.Errorf("Missed cache: %q", blobHash)
 	}
-	return []byte(cache), nil
+	return copy(p, cache), nil
 }
 
 func (mc *memoryCache) Add(blobHash string, p []byte) {

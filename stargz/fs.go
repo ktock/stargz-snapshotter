@@ -80,6 +80,7 @@ const (
 	stateDirName              = ".stargz-snapshotter"
 	defaultLRUCacheEntry      = 100
 	defaultResolveResultEntry = 100
+	defaultPrefetchTimeoutSec = 10
 	statFileMode              = syscall.S_IFREG | 0400 // -r--------
 	stateDirMode              = syscall.S_IFDIR | 0500 // dr-x------
 
@@ -109,6 +110,7 @@ type Config struct {
 	LRUCacheEntry                     int    `toml:"lru_max_entry"`
 	ResolveResultEntry                int    `toml:"resolve_result_entry"`
 	PrefetchSize                      int64  `toml:"prefetch_size"`
+	PrefetchTimeoutSec                int64  `toml:"prefetch_timeout_sec"`
 	NoPrefetch                        bool   `toml:"noprefetch"`
 	Debug                             bool   `toml:"debug"`
 }
@@ -134,12 +136,17 @@ func NewFilesystem(ctx context.Context, root string, config *Config) (snbase.Fil
 	if resolveResultEntry == 0 {
 		resolveResultEntry = defaultResolveResultEntry
 	}
+	prefetchTimeout := time.Duration(config.PrefetchTimeoutSec) * time.Second
+	if prefetchTimeout == 0 {
+		prefetchTimeout = defaultPrefetchTimeoutSec * time.Second
+	}
 	return &filesystem{
 		resolver:              remote.NewResolver(keychain, config.ResolverConfig),
 		blobConfig:            config.BlobConfig,
 		httpCache:             httpCache,
 		fsCache:               fsCache,
 		prefetchSize:          config.PrefetchSize,
+		prefetchTimeout:       prefetchTimeout,
 		noprefetch:            config.NoPrefetch,
 		debug:                 config.Debug,
 		layer:                 make(map[string]*layer),
@@ -162,6 +169,7 @@ type filesystem struct {
 	httpCache             cache.BlobCache
 	fsCache               cache.BlobCache
 	prefetchSize          int64
+	prefetchTimeout       time.Duration
 	noprefetch            bool
 	debug                 bool
 	layer                 map[string]*layer
@@ -349,7 +357,7 @@ func (fs *filesystem) resolve(ctx context.Context, ref, digest string) *resolveR
 			return nil, errors.Wrap(err, "failed to read layer")
 		}
 
-		return newLayer(blob, gr, root), nil
+		return newLayer(blob, gr, root, fs.prefetchTimeout), nil
 	})
 }
 
@@ -371,7 +379,7 @@ func (fs *filesystem) Check(ctx context.Context, mountpoint string) error {
 	}
 
 	// Wait for prefetch compeletion
-	if err := l.waitForPrefetchCompletion(10 * time.Second); err != nil {
+	if err := l.waitForPrefetchCompletion(); err != nil {
 		logCtx.WithError(err).Warn("failed to sync with prefetch completion")
 	}
 
@@ -507,20 +515,22 @@ func (rr *resolveResult) isInProgress() bool {
 	return rr.progress.isInProgress()
 }
 
-func newLayer(blob remote.Blob, r reader.Reader, root *stargz.TOCEntry) *layer {
+func newLayer(blob remote.Blob, r reader.Reader, root *stargz.TOCEntry, prefetchTimeout time.Duration) *layer {
 	return &layer{
-		blob:           blob,
-		reader:         r,
-		root:           root,
-		prefetchWaiter: newWaiter(),
+		blob:            blob,
+		reader:          r,
+		root:            root,
+		prefetchWaiter:  newWaiter(),
+		prefetchTimeout: prefetchTimeout,
 	}
 }
 
 type layer struct {
-	blob           remote.Blob
-	reader         reader.Reader
-	root           *stargz.TOCEntry
-	prefetchWaiter *waiter
+	blob            remote.Blob
+	reader          reader.Reader
+	root            *stargz.TOCEntry
+	prefetchWaiter  *waiter
+	prefetchTimeout time.Duration
 }
 
 func (l *layer) prefetch(prefetchSize int64, opts ...remote.Option) error {
@@ -545,15 +555,15 @@ func (l *layer) prefetch(prefetchSize int64, opts ...remote.Option) error {
 		return l.blob.ReadAt(p, off, opts...)
 	}), 0, prefetchSize)
 	err := l.reader.CacheTarGzWithReader(pr)
-	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+	if err != nil && errors.Cause(err) != io.EOF && errors.Cause(err) != io.ErrUnexpectedEOF {
 		return errors.Wrap(err, "failed to cache prefetched layer")
 	}
 
 	return nil
 }
 
-func (l *layer) waitForPrefetchCompletion(timeout time.Duration) error {
-	return l.prefetchWaiter.wait(timeout)
+func (l *layer) waitForPrefetchCompletion() error {
+	return l.prefetchWaiter.wait(l.prefetchTimeout)
 }
 
 func newWaiter() *waiter {
