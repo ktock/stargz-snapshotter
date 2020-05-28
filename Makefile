@@ -86,3 +86,6 @@ test-pullsecrets:
 
 test-cri:
 	@./script/cri/test.sh
+
+fio-simple:
+	@./script/fio-simple/test.sh

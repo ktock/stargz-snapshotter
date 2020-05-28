@@ -2,22 +2,18 @@ name: Benchmark
 on: [push, pull_request]
 
 jobs:
-  hello-bench:
+  fio-simple:
     runs-on: ubuntu-18.04
-    name: HelloBench
+    name: FioSimple
     env:
       BENCHMARK_RESULT_DIR: ${{ github.workspace }}/benchmark/
-      BENCHMARK_USER: stargz
-      BENCHMARK_TARGETS: python:3.7 gcc:9.2.0 rethinkdb:2.3.6 glassfish:4.1-jdk8
     steps:
-    - name: Install gnuplot
-      run: sudo apt-get --no-install-recommends install -y gnuplot
     - uses: actions/checkout@v2
     - name: Prepare output directory
       run: mkdir "${BENCHMARK_RESULT_DIR}"
     - name: Run benchmark
-      run: make benchmark
+      run: make fio-simple
     - uses: actions/upload-artifact@v1
       with:
-        name: benchmarking-result
+        name: fio-simple-result
         path: ${{ env.BENCHMARK_RESULT_DIR }}
