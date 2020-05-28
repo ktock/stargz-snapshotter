@@ -21,3 +21,18 @@ jobs:
       with:
         name: benchmarking-result
         path: ${{ env.BENCHMARK_RESULT_DIR }}
+  fio-simple:
+    runs-on: ubuntu-18.04
+    name: FioSimple
+    env:
+      BENCHMARK_RESULT_DIR: ${{ github.workspace }}/benchmark/
+    steps:
+    - uses: actions/checkout@v2
+    - name: Prepare output directory
+      run: mkdir "${BENCHMARK_RESULT_DIR}"
+    - name: Run benchmark
+      run: make fio-simple
+    - uses: actions/upload-artifact@v1
+      with:
+        name: fio-simple-result
+        path: ${{ env.BENCHMARK_RESULT_DIR }}
