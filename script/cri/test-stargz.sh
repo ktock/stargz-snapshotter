@@ -23,6 +23,9 @@ REGISTRY_HOST="cri-registry"
 TEST_NODE_NAME="cri-testenv-container"
 CONTAINERD_SOCK=unix:///run/containerd/containerd.sock
 
+NGINX_LATEST_IMAGE="docker.io/library/nginx:latest"
+NGINX_118_IMAGE="docker.io/library/nginx:1.18"
+
 source "${CONTEXT}/const.sh"
 source "${REPO}/script/util/utils.sh"
 
@@ -101,6 +104,11 @@ fi
 # Mirror and stargzify all images used in tests
 cat "${IMAGE_LIST}" | sort | uniq | while read IMAGE ; do
     MIRROR_URL="http://${REGISTRY_HOST}:5000"$(echo "${IMAGE}" | sed -E 's/^[^/]*//g' | sed -E 's/@.*//g')
+    if [ "${IMAGE}" == "${NGINX_LATEST_IMAGE}" ] ; then
+        # Use CRI-validation-friendly version of nginx image to avoid slow
+        # shellscript-based entrypoint which causes race condition in some subtests.
+        IMAGE="${NGINX_118_IMAGE}"
+    fi
     STARGZIFY="ctr-remote images optimize --plain-http ${IMAGE} ${MIRROR_URL}"
     echo "Mirroring: ${STARGZIFY}"
     docker exec "${TEST_NODE_NAME}" /bin/bash -c "${STARGZIFY}"
