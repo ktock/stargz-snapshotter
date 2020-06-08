@@ -25,7 +25,6 @@ package reader
 import (
 	"archive/tar"
 	"bytes"
-	"compress/gzip"
 	"crypto/sha256"
 	"fmt"
 	"io"
@@ -41,7 +40,7 @@ import (
 type Reader interface {
 	OpenFile(name string) (io.ReaderAt, error)
 	Lookup(name string) (*stargz.TOCEntry, bool)
-	CacheTarGzWithReader(r io.Reader, opts ...cache.Option) error
+	CacheTarWithReader(r io.Reader, opts ...cache.Option) error
 }
 
 func NewReader(sr *io.SectionReader, cache cache.BlobCache) (Reader, *stargz.TOCEntry, error) {
@@ -97,13 +96,8 @@ func (gr *reader) Lookup(name string) (*stargz.TOCEntry, bool) {
 	return gr.r.Lookup(name)
 }
 
-func (gr *reader) CacheTarGzWithReader(r io.Reader, opts ...cache.Option) error {
-	gzr, err := gzip.NewReader(r)
-	if err != nil {
-		return errors.Wrapf(err, "failed to get gzip reader")
-	}
-	defer gzr.Close()
-	tr := tar.NewReader(gzr)
+func (gr *reader) CacheTarWithReader(r io.Reader, opts ...cache.Option) error {
+	tr := tar.NewReader(r)
 	for {
 		h, err := tr.Next()
 		if err != nil {

@@ -39,6 +39,7 @@ package stargz
 import (
 	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -53,7 +54,11 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/containerd/containerd"
+	"github.com/containerd/containerd/content"
+	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/log"
+	"github.com/containerd/containerd/namespaces"
 	"github.com/containerd/stargz-snapshotter/cache"
 	snbase "github.com/containerd/stargz-snapshotter/snapshot"
 	"github.com/containerd/stargz-snapshotter/stargz/handler"
@@ -66,6 +71,8 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn"
 	fusefs "github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
+	digest "github.com/opencontainers/go-digest"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
 	"golang.org/x/sys/unix"
 )
@@ -82,6 +89,7 @@ const (
 	defaultPrefetchTimeoutSec = 10
 	statFileMode              = syscall.S_IFREG | 0400 // -r--------
 	stateDirMode              = syscall.S_IFDIR | 0500 // dr-x------
+	defaultContainerdAddress  = "/run/containerd/containerd.sock"
 
 	// targetRefLabelCRI is a label which contains image reference passed from CRI plugin
 	targetRefLabelCRI = "containerd.io/snapshot/cri.image-ref"
@@ -98,6 +106,15 @@ const (
 	// NoPrefetchLandmark is a file entry which indicates that no prefetch should
 	// occur in the stargz file.
 	NoPrefetchLandmark = ".no.prefetch.landmark"
+
+	// labels passed by docker for preparing layer contents
+	targetRefLabelContainers              = "containerd.io/snapshot/containers.reference"
+	targetDigestLabelContainers           = "containerd.io/snapshot/containers.digest"
+	targetImageLayersLabelContainers      = "containerd.io/snapshot/containers.layers"
+	targetContentNamespaceLabelContainers = "containerd.io/snapshot/containers.content-namespace"
+	targetContentDiffIDLabelContainers    = "containerd.io/snapshot/containers.content-diffID"
+
+	labelTargetRef = "containerd.io/snapshot.ref"
 )
 
 type Config struct {
@@ -105,6 +122,8 @@ type Config struct {
 	remote.BlobConfig                 `toml:"blob"`
 	keychain.KubeconfigKeychainConfig `toml:"kubeconfig_keychain"`
 	cache.DirectoryCacheConfig        `toml:"directory_cache"`
+	ContainerdAddress                 string `toml:"containerd_address"`
+	StoreContent                      bool   `toml:"store_content"`
 	HTTPCacheType                     string `toml:"http_cache_type"`
 	FSCacheType                       string `toml:"filesystem_cache_type"`
 	ResolveResultEntry                int    `toml:"resolve_result_entry"`
@@ -145,6 +164,17 @@ func NewFilesystem(ctx context.Context, root string, config *Config) (_ snbase.F
 	if resolveResultEntry == 0 {
 		resolveResultEntry = defaultResolveResultEntry
 	}
+	var lCtd func(context.Context) (*containerd.Client, error)
+	if config.StoreContent {
+		containerdAddr := config.ContainerdAddress
+		if containerdAddr == "" {
+			containerdAddr = defaultContainerdAddress
+		}
+		// TODO: more dial options
+		lCtd = lazyContainerd(func() (*containerd.Client, error) {
+			return containerd.New(containerdAddr)
+		})
+	}
 	prefetchTimeout := time.Duration(config.PrefetchTimeoutSec) * time.Second
 	if prefetchTimeout == 0 {
 		prefetchTimeout = defaultPrefetchTimeoutSec * time.Second
@@ -158,6 +188,8 @@ func NewFilesystem(ctx context.Context, root string, config *Config) (_ snbase.F
 		prefetchTimeout:       prefetchTimeout,
 		noprefetch:            config.NoPrefetch,
 		debug:                 config.Debug,
+		containerd:            lCtd,
+		storeContent:          config.StoreContent,
 		layer:                 make(map[string]*layer),
 		resolveResult:         lru.New(resolveResultEntry),
 		backgroundTaskManager: task.NewBackgroundTaskManager(2, 5*time.Second),
@@ -173,6 +205,8 @@ type filesystem struct {
 	prefetchTimeout       time.Duration
 	noprefetch            bool
 	debug                 bool
+	containerd            func(context.Context) (*containerd.Client, error)
+	storeContent          bool
 	layer                 map[string]*layer
 	layerMu               sync.Mutex
 	resolveResult         *lru.Cache
@@ -189,7 +223,7 @@ func (fs *filesystem) Mount(ctx context.Context, mountpoint string, labels map[s
 	logCtx := log.G(ctx).WithField("mountpoint", mountpoint)
 
 	// Get basic information of this layer.
-	ref, digest, layers, prefetchSize, err := fs.parseLabels(labels)
+	targetRef, ref, digest, layers, prefetchSize, err := fs.parseLabels(labels)
 	if err != nil {
 		logCtx.WithError(err).Debug("failed to get necessary information from labels")
 		return err
@@ -202,6 +236,9 @@ func (fs *filesystem) Mount(ctx context.Context, mountpoint string, labels map[s
 		target   = append([]string{digest}, layers...)
 	)
 	for _, dgst := range target {
+		if dgst == "" {
+			continue
+		}
 		var (
 			rr  *resolveResult
 			key = fmt.Sprintf("%s/%s", ref, dgst)
@@ -277,8 +314,34 @@ func (fs *filesystem) Mount(ctx context.Context, mountpoint string, labels map[s
 	// interrupt the reading. This can avoid disturbing prioritized tasks
 	// about NW traffic. We read layer with a buffer to reduce num of
 	// requests to the registry.
+	var cw io.WriteCloser
+	if fs.storeContent && labels != nil {
+		// Store the layer contents to the content store if needed.
+		namespace, nOK := labels[targetContentNamespaceLabelContainers]
+		diffID, dOK := labels[targetContentDiffIDLabelContainers]
+		if nOK && dOK {
+			logCtx.Debugf("Preparing content writer with ref=%q, digest=%q, namespace=%q",
+				targetRef, diffID, namespace)
+			ctx := namespaces.WithNamespace(context.Background(), namespace)
+			if cw, err = fs.contentStoreWriter(ctx, targetRef, diffID); err != nil {
+				logCtx.WithError(err).Warn("failed to prepare content store writer")
+				return err
+			}
+		} else {
+			logCtx.Debugf("no namespace info is passed; Disabling to write content to store")
+		}
+	}
 	go func() {
-		br := io.NewSectionReader(readerAtFunc(func(p []byte, offset int64) (retN int, retErr error) {
+		if cw != nil {
+			defer func() {
+				if err := cw.Close(); err != nil {
+					logCtx.WithError(err).Debug("failed to close content writer")
+					return
+				}
+				logCtx.Debug("completed to close content store writer")
+			}()
+		}
+		br := io.Reader(io.NewSectionReader(readerAtFunc(func(p []byte, offset int64) (retN int, retErr error) {
 			fs.backgroundTaskManager.InvokeBackgroundTask(func(ctx context.Context) {
 				tr, err := fetchTr()
 				if err != nil {
@@ -295,8 +358,20 @@ func (fs *filesystem) Mount(ctx context.Context, mountpoint string, labels map[s
 				)
 			}, 120*time.Second)
 			return
-		}), 0, l.blob.Size())
-		if err := l.reader.CacheTarGzWithReader(br, cache.Direct()); err != nil {
+		}), 0, l.blob.Size()))
+
+		rawR, err := gzip.NewReader(br)
+		if err != nil {
+			logCtx.Debug("failed to get gzip reader: %v", err)
+			return
+		}
+		defer rawR.Close()
+
+		r := io.Reader(rawR)
+		if cw != nil {
+			r = io.TeeReader(r, cw)
+		}
+		if err := l.reader.CacheTarWithReader(r, cache.Direct()); err != nil {
 			logCtx.WithError(err).Debug("failed to fetch whole layer")
 			return
 		}
@@ -370,6 +445,52 @@ func (fs *filesystem) resolve(ctx context.Context, ref, digest string) *resolveR
 	})
 }
 
+func (fs *filesystem) contentStoreWriter(ctx context.Context, cRef, dgst string) (io.WriteCloser, error) {
+	pdgst, err := digest.Parse(dgst)
+	if err != nil {
+		return nil, err
+	}
+	var ctd *containerd.Client
+	if fs.containerd == nil {
+		return nil, fmt.Errorf("snapshotter doesn't connect to containerd")
+	} else {
+		ctd, err = fs.containerd(ctx)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to connect to containerd")
+		}
+	}
+	cs := ctd.ContentStore()
+	cw, err := content.OpenWriter(ctx, cs, content.WithRef(cRef), content.WithDescriptor(ocispec.Descriptor{
+		Digest: pdgst,
+	}))
+	if err != nil {
+		return nil, err
+	}
+
+	return &writeCloserWrapper{
+		Writer: cw,
+		closeFunc: func() (err error) {
+			defer cw.Close()
+			if err = cw.Commit(ctx, 0, pdgst); err != nil && !errdefs.IsAlreadyExists(err) {
+				if aErr := cs.Abort(ctx, cRef); aErr != nil {
+					err = errors.Wrapf(aErr, "Aborting failed; Commit error: %v", err)
+				}
+			}
+			return
+
+		},
+	}, nil
+}
+
+type writeCloserWrapper struct {
+	io.Writer
+	closeFunc func() error
+}
+
+func (r *writeCloserWrapper) Close() error {
+	return r.closeFunc()
+}
+
 func (fs *filesystem) Check(ctx context.Context, mountpoint string) error {
 	// This is a prioritized task and all background tasks will be stopped
 	// execution so this can avoid being disturbed for NW traffic by background
@@ -425,34 +546,46 @@ func (fs *filesystem) check(ctx context.Context, l *layer) error {
 	return nil
 }
 
-func (fs *filesystem) parseLabels(labels map[string]string) (rRef, rDigest string, rLayers []string, rPrefetchSize int64, _ error) {
+func (fs *filesystem) parseLabels(labels map[string]string) (rTarget, rRef, rDigest string, rLayers []string, rPrefetchSize int64, _ error) {
 
 	// mandatory labels
-	if ref, ok := labels[targetRefLabelCRI]; ok {
-		rRef = ref
-	} else if ref, ok := labels[handler.TargetRefLabel]; ok {
-		rRef = ref
+	if target, ok := labels[labelTargetRef]; ok && target != "" {
+		rTarget = target
 	} else {
-		return "", "", nil, 0, fmt.Errorf("reference hasn't been passed")
+		return "", "", "", nil, 0, fmt.Errorf("target hasn't been passed")
 	}
-	if digest, ok := labels[targetDigestLabelCRI]; ok {
-		rDigest = digest
-	} else if digest, ok := labels[handler.TargetDigestLabel]; ok {
-		rDigest = digest
+
+	if ref, ok := labels[targetRefLabelCRI]; ok && ref != "" {
+		rRef = ref
+	} else if ref, ok := labels[targetRefLabelContainers]; ok && ref != "" {
+		rRef = ref
+	} else if ref, ok := labels[handler.TargetRefLabel]; ok && ref != "" {
+		rRef = ref
 	} else {
-		return "", "", nil, 0, fmt.Errorf("digest hasn't been passed")
+		return "", "", "", nil, 0, fmt.Errorf("reference hasn't been passed")
 	}
-	if l, ok := labels[targetImageLayersLabel]; ok {
+	if digest, ok := labels[targetDigestLabelCRI]; ok && digest != "" {
+		rDigest = digest
+	} else if digest, ok := labels[targetDigestLabelContainers]; ok && digest != "" {
+		rDigest = digest
+	} else if digest, ok := labels[handler.TargetDigestLabel]; ok && digest != "" {
+		rDigest = digest
+	} else {
+		return "", "", "", nil, 0, fmt.Errorf("digest hasn't been passed")
+	}
+	if l, ok := labels[targetImageLayersLabel]; ok && l != "" {
 		rLayers = strings.Split(l, ",")
-	} else if l, ok := labels[handler.TargetImageLayersLabel]; ok {
+	} else if l, ok := labels[targetImageLayersLabelContainers]; ok && l != "" {
+		rLayers = strings.Split(l, ",")
+	} else if l, ok := labels[handler.TargetImageLayersLabel]; ok && l != "" {
 		rLayers = strings.Split(l, ",")
 	} else {
-		return "", "", nil, 0, fmt.Errorf("image layers hasn't been passed")
+		return "", "", "", nil, 0, fmt.Errorf("image layers hasn't been passed")
 	}
 
 	// optional label
 	rPrefetchSize = fs.prefetchSize
-	if psStr, ok := labels[handler.TargetPrefetchSizeLabel]; ok {
+	if psStr, ok := labels[handler.TargetPrefetchSizeLabel]; ok && psStr != "" {
 		if ps, err := strconv.ParseInt(psStr, 10, 64); err == nil {
 			rPrefetchSize = ps
 		}
@@ -478,6 +611,31 @@ func lazyTransport(trFunc func() (http.RoundTripper, error)) func() (http.RoundT
 		}
 		tr = gotTr
 		return tr, nil
+	}
+}
+
+func lazyContainerd(ctdFunc func() (*containerd.Client, error)) func(context.Context) (*containerd.Client, error) {
+	var (
+		ctd   *containerd.Client
+		ctdMu sync.Mutex
+	)
+	return func(ctx context.Context) (*containerd.Client, error) {
+		ctdMu.Lock()
+		defer ctdMu.Unlock()
+		if ctd != nil {
+			if ok, err := ctd.IsServing(ctx); ok && err == nil {
+				return ctd, nil
+			}
+			if err := ctd.Reconnect(); err == nil {
+				return ctd, nil
+			}
+		}
+		gotCtd, err := ctdFunc()
+		if err != nil {
+			return nil, err
+		}
+		ctd = gotCtd
+		return ctd, nil
 	}
 }
 
@@ -568,7 +726,14 @@ func (l *layer) prefetch(prefetchSize int64, opts ...remote.Option) error {
 	pr := io.NewSectionReader(readerAtFunc(func(p []byte, off int64) (int, error) {
 		return l.blob.ReadAt(p, off, opts...)
 	}), 0, prefetchSize)
-	err := l.reader.CacheTarGzWithReader(pr)
+
+	rawR, err := gzip.NewReader(pr)
+	if err != nil {
+		return errors.Wrapf(err, "failed to get gzip reader")
+	}
+	defer rawR.Close()
+
+	err = l.reader.CacheTarWithReader(rawR)
 	if err != nil && errors.Cause(err) != io.EOF && errors.Cause(err) != io.ErrUnexpectedEOF {
 		return errors.Wrap(err, "failed to cache prefetched layer")
 	}
