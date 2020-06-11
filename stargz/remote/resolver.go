@@ -225,9 +225,6 @@ func (r *Resolver) resolve(ref, digest string) (*fetcher, int64, error) {
 }
 
 func (r *Resolver) resolveReference(ref name.Reference, digest string) (string, http.RoundTripper, error) {
-	r.trPoolMu.Lock()
-	defer r.trPoolMu.Unlock()
-
 	// Construct endpoint URL from given ref
 	endpointURL := fmt.Sprintf("%s://%s/v2/%s/blobs/%s",
 		ref.Context().Registry.Scheme(),
@@ -236,14 +233,14 @@ func (r *Resolver) resolveReference(ref name.Reference, digest string) (string, 
 		digest)
 
 	// Try to use cached transport (cahced per reference name)
-	if tr, ok := r.trPool.Get(ref.Name()); ok {
-		if url, err := redirect(endpointURL, tr.(http.RoundTripper)); err == nil {
-			return url, tr.(http.RoundTripper), nil
+	r.trPoolMu.Lock()
+	c, ok := r.trPool.Get(ref.Name())
+	r.trPoolMu.Unlock()
+	if ok {
+		if url, err := redirect(endpointURL, c.(http.RoundTripper)); err == nil {
+			return url, c.(http.RoundTripper), nil
 		}
 	}
-
-	// Remove the stale transport from cache
-	r.trPool.Remove(ref.Name())
 
 	// transport is unavailable/expired so refresh the transport and try again
 	tr, err := authnTransport(ref, r.transport, r.keychain)
@@ -256,7 +253,9 @@ func (r *Resolver) resolveReference(ref name.Reference, digest string) (string, 
 	}
 
 	// Update transports cache
+	r.trPoolMu.Lock()
 	r.trPool.Add(ref.Name(), tr)
+	r.trPoolMu.Unlock()
 
 	return url, tr, nil
 }
