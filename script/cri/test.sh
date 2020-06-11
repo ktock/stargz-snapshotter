@@ -49,7 +49,7 @@ RUN apt install -y --no-install-recommends git make gcc build-essential jq && \
     git clone https://github.com/ktock/cri-tools \
               \${GOPATH}/src/github.com/kubernetes-sigs/cri-tools && \
     cd \${GOPATH}/src/github.com/kubernetes-sigs/cri-tools && \
-    git checkout 07adcf5782d1da83a9c1ee910377227990369c5d && \
+    git checkout b5593d38f88cd5f1ee2b092c733c184cfc738b08 && \
     make critest && make install-critest -e BINDIR=\${GOPATH}/bin && \
     git clone -b v1.11.1 https://github.com/containerd/cri \
               \${GOPATH}/src/github.com/containerd/cri && \
