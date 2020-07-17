@@ -37,7 +37,7 @@ github.com/containerd/cgroups/v2
 github.com/containerd/cgroups/v2/stats
 # github.com/containerd/console v1.0.0
 github.com/containerd/console
-# github.com/containerd/containerd v1.4.0-beta.1
+# github.com/containerd/containerd v1.4.0-beta.2
 github.com/containerd/containerd
 github.com/containerd/containerd/api/events
 github.com/containerd/containerd/api/services/containers/v1
@@ -66,6 +66,7 @@ github.com/containerd/containerd/cmd/ctr/commands/images
 github.com/containerd/containerd/cmd/ctr/commands/install
 github.com/containerd/containerd/cmd/ctr/commands/leases
 github.com/containerd/containerd/cmd/ctr/commands/namespaces
+github.com/containerd/containerd/cmd/ctr/commands/oci
 github.com/containerd/containerd/cmd/ctr/commands/plugins
 github.com/containerd/containerd/cmd/ctr/commands/pprof
 github.com/containerd/containerd/cmd/ctr/commands/run
