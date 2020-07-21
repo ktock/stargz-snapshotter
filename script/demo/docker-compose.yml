@@ -22,6 +22,7 @@ services:
     volumes:
     - /dev/fuse:/dev/fuse
     - "${GOPATH}/src/github.com/containerd/stargz-snapshotter:/go/src/github.com/containerd/stargz-snapshotter:ro"
+    - "${GOPATH}/src/github.com/containerd/containerd:/go/src/github.com/containerd/containerd"
     - type: volume
       source: demo-containerd-data
       target: /var/lib/containerd

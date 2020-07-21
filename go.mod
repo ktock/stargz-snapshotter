@@ -40,3 +40,5 @@ require (
 	k8s.io/apimachinery v0.17.4
 	k8s.io/client-go v0.17.4
 )
+
+replace github.com/containerd/containerd => github.com/dmcgowan/containerd v1.1.1-0.20200721074607-c8b14ae4c01e
