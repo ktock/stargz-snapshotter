@@ -65,6 +65,11 @@ function set_noprefetch {
     sed -i 's/noprefetch = .*/noprefetch = '"${NOPREFETCH}"'/g' "${REMOTE_SNAPSHOTTER_CONFIG_DIR}config.toml"
 }
 
+function set_allow_no_verification {
+    local ALLOW_NO_VERIFICATION="${1}"
+    sed -i 's/allow_no_verification = .*/allow_no_verification = '"${ALLOW_NO_VERIFICATION}"'/g' "${REMOTE_SNAPSHOTTER_CONFIG_DIR}config.toml"
+}
+
 function measure {
     local OPTION="${1}"
     local USER="${2}"
@@ -116,6 +121,7 @@ for SAMPLE_NO in $(seq ${NUM_OF_SAMPLES}) ; do
         if [ "${MODE}" == "${STARGZ_MODE}" ] ; then
             echo -n "" > "${TMP_LOG_FILE}"
             set_noprefetch "true" # disable prefetch
+            set_allow_no_verification "true" # allows non verifiable stargz image
             LOG_FILE="${TMP_LOG_FILE}" "${REBOOT_CONTAINERD_SCRIPT}"
             measure "--mode=stargz" ${TARGET_REPOUSER} ${IMAGE}
             check_remote_snapshots "${TMP_LOG_FILE}"
@@ -124,6 +130,7 @@ for SAMPLE_NO in $(seq ${NUM_OF_SAMPLES}) ; do
         if [ "${MODE}" == "${ESTARGZ_MODE}" ] ; then
             echo -n "" > "${TMP_LOG_FILE}"
             set_noprefetch "false" # enable prefetch
+            set_allow_no_verification "false" # force verification
             LOG_FILE="${TMP_LOG_FILE}" "${REBOOT_CONTAINERD_SCRIPT}"
             measure "--mode=estargz" ${TARGET_REPOUSER} ${IMAGE}
             check_remote_snapshots "${TMP_LOG_FILE}"

@@ -176,7 +176,9 @@ class BenchRunner:
             return "%s-org" % repo
 
     def pull_subcmd(self):
-        if self.lazypull():
+        if self.mode == ESTARGZ_MODE:
+            return "rpull"
+        elif self.mode == STARGZ_MODE:
             return "rpull --skip-content-verify"
         else:
             return "pull"
