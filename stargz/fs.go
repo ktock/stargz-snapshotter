@@ -301,8 +301,8 @@ func (fs *filesystem) Mount(ctx context.Context, mountpoint string, labels map[s
 				logCtx.WithError(err).Debug("failed to prepare transport for prefetch")
 				return
 			}
-			if err := l.prefetch(prefetchSize, remote.WithRoundTripper(tr)); err != nil {
-				logCtx.WithError(err).Debug("failed to prefetched layer")
+			if err := l.prefetch(ctx, prefetchSize, remote.WithRoundTripper(tr)); err != nil {
+				logCtx.WithError(err).Debug("failed to prefetch layer")
 				return
 			}
 			logCtx.Debug("completed to prefetch")
@@ -619,7 +619,7 @@ func (l *layer) donePrefetch() {
 	l.prefetchWaiter.done()
 }
 
-func (l *layer) prefetch(prefetchSize int64, opts ...remote.Option) error {
+func (l *layer) prefetch(ctx context.Context, prefetchSize int64, opts ...remote.Option) error {
 	lr, err := l.reader()
 	if err != nil {
 		return err
@@ -638,13 +638,21 @@ func (l *layer) prefetch(prefetchSize int64, opts ...remote.Option) error {
 	if err := l.blob.Cache(0, prefetchSize, opts...); err != nil {
 		return errors.Wrap(err, "failed to prefetch layer")
 	}
-	pr := io.NewSectionReader(readerAtFunc(func(p []byte, off int64) (int, error) {
-		return l.blob.ReadAt(p, off, opts...)
-	}), 0, prefetchSize)
-	err = lr.CacheTarGzWithReader(pr)
-	if err != nil && errors.Cause(err) != io.EOF && errors.Cause(err) != io.ErrUnexpectedEOF {
-		return errors.Wrap(err, "failed to cache prefetched layer")
-	}
+
+	// Precache in background
+	go func() {
+		pr := io.NewSectionReader(readerAtFunc(func(p []byte, off int64) (int, error) {
+			return l.blob.ReadAt(p, off, opts...)
+		}), 0, prefetchSize)
+		err := lr.CacheTarGzWithReader(pr)
+		if err != nil &&
+			errors.Cause(err) != io.EOF &&
+			errors.Cause(err) != io.ErrUnexpectedEOF {
+			log.G(ctx).WithError(err).Debug("failed to precache")
+			return
+		}
+		log.G(ctx).Debug("completed to precache")
+	}()
 
 	return nil
 }
