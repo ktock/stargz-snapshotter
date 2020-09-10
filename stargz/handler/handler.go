@@ -19,6 +19,7 @@ package handler
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/containerd/containerd/images"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -29,6 +30,7 @@ const (
 	TargetDigestLabel       = "containerd.io/snapshot/remote/stargz.digest"
 	TargetImageLayersLabel  = "containerd.io/snapshot/remote/stargz.layers"
 	TargetPrefetchSizeLabel = "containerd.io/snapshot/remote/stargz.prefetch" // optional
+	maxSize                 = 4096
 )
 
 // AppendInfoHandlerWrapper makes a handler which appends image's basic
@@ -44,15 +46,6 @@ func AppendInfoHandlerWrapper(ref string, prefetchSize int64) func(f images.Hand
 			}
 			switch desc.MediaType {
 			case ocispec.MediaTypeImageManifest, images.MediaTypeDockerSchema2Manifest:
-				var layers string
-				for _, c := range children {
-					if images.IsLayerType(c.MediaType) {
-						layers += fmt.Sprintf("%s,", c.Digest.String())
-					}
-				}
-				if len(layers) >= 1 {
-					layers = layers[:len(layers)-1]
-				}
 				for i := range children {
 					c := &children[i]
 					if images.IsLayerType(c.MediaType) {
@@ -61,7 +54,7 @@ func AppendInfoHandlerWrapper(ref string, prefetchSize int64) func(f images.Hand
 						}
 						c.Annotations[TargetRefLabel] = ref
 						c.Annotations[TargetDigestLabel] = c.Digest.String()
-						c.Annotations[TargetImageLayersLabel] = layers
+						c.Annotations[TargetImageLayersLabel] = getLayersList(children[i:])
 						c.Annotations[TargetPrefetchSizeLabel] = fmt.Sprintf("%d", prefetchSize)
 					}
 				}
@@ -69,4 +62,17 @@ func AppendInfoHandlerWrapper(ref string, prefetchSize int64) func(f images.Hand
 			return children, nil
 		})
 	}
+}
+
+func getLayersList(layers []ocispec.Descriptor) (list string) {
+	for _, l := range layers {
+		if images.IsLayerType(l.MediaType) {
+			ls := l.Digest.String()
+			if (len(ls) + len(list)) > maxSize {
+				break
+			}
+			list += fmt.Sprintf("%s,", ls)
+		}
+	}
+	return strings.TrimSuffix(list, ",")
 }
