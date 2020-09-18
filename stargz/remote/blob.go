@@ -107,7 +107,8 @@ func (b *blob) Cache(offset int64, size int64, opts ...Option) error {
 	fr := b.fetcher
 	b.fetcherMu.Unlock()
 
-	fetchReg := region{floor(offset, b.chunkSize), ceil(offset+size-1, b.chunkSize) - 1}
+	// fetchReg := region{floor(offset, b.chunkSize), ceil(offset+size-1, b.chunkSize) - 1}
+	fetchReg := region{offset, offset+size-1}
 	discard := make(map[region]io.Writer)
 	b.walkChunks(fetchReg, func(reg region) error {
 		if _, err := b.cache.FetchAt(fr.genID(reg), 0, nil, cacheOpts.cacheOpts...); err != nil {
@@ -131,14 +132,15 @@ func (b *blob) ReadAt(p []byte, offset int64, opts ...Option) (int, error) {
 	}
 
 	// Make the buffer chunk aligned
-	allRegion := region{floor(offset, b.chunkSize), ceil(offset+int64(len(p))-1, b.chunkSize) - 1}
+	allRegion := region{offset, offset+int64(len(p))-1}
+	// allRegion := region{floor(offset, b.chunkSize), ceil(offset+int64(len(p))-1, b.chunkSize) - 1}
 	allData := make(map[region]io.Writer)
-	var putBufs []*bytes.Buffer
-	defer func() {
-		for _, bf := range putBufs {
-			b.resolver.bufPool.Put(bf)
-		}
-	}()
+	// var putBufs []*bytes.Buffer
+	// defer func() {
+	// 	for _, bf := range putBufs {
+	// 		b.resolver.bufPool.Put(bf)
+	// 	}
+	// }()
 
 	var readAtOpts options
 	for _, o := range opts {
@@ -151,52 +153,61 @@ func (b *blob) ReadAt(p []byte, offset int64, opts ...Option) (int, error) {
 	fr := b.fetcher
 	b.fetcherMu.Unlock()
 
-	var commits []func() error
+	// var commits []func() error
 	b.walkChunks(allRegion, func(chunk region) error {
 		var (
 			base         = positive(chunk.b - offset)
-			lowerUnread  = positive(offset - chunk.b)
-			upperUnread  = positive(chunk.e + 1 - (offset + int64(len(p))))
-			expectedSize = chunk.size() - upperUnread - lowerUnread
+			// lowerUnread  = positive(offset - chunk.b)
+			// upperUnread  = positive(chunk.e + 1 - (offset + int64(len(p))))
+			// expectedSize = chunk.size() - upperUnread - lowerUnread
 		)
 
-		// Check if the content exists in the cache
-		n, err := b.cache.FetchAt(fr.genID(chunk), lowerUnread, p[base:base+expectedSize], readAtOpts.cacheOpts...)
-		if err == nil && n == int(expectedSize) {
+		// // Check if the content exists in the cache
+		// n, err := b.cache.FetchAt(fr.genID(chunk), lowerUnread, p[base:base+expectedSize], readAtOpts.cacheOpts...)
+		// if err == nil && n == int(expectedSize) {
+		// 	return nil
+		// }
+
+		ip := p[base:base+chunk.size()]
+		n, err := b.cache.FetchAt(fr.genID(chunk), 0, ip, readAtOpts.cacheOpts...)
+		if err == nil && n == int(chunk.size()) {
 			return nil
 		}
-
-		// We missed cache. Take it from remote registry.
-		// We get the whole chunk here and add it to the cache so that following
-		// reads against neighboring chunks can take the data without making HTTP requests.
-		if lowerUnread == 0 && upperUnread == 0 {
-			// We can directly store the result in the given buffer
-			allData[chunk] = &byteWriter{
-				p: p[base : base+chunk.size()],
-			}
-		} else {
-			// Use temporally buffer for aligning this chunk
-			bf := b.resolver.bufPool.Get().(*bytes.Buffer)
-			putBufs = append(putBufs, bf)
-			bf.Reset()
-			bf.Grow(int(chunk.size()))
-			allData[chunk] = bf
-
-			// Function for committing the buffered chunk into the result slice.
-			commits = append(commits, func() error {
-				if int64(bf.Len()) != chunk.size() {
-					return fmt.Errorf("unexpected data size %d; want %d",
-						bf.Len(), chunk.size())
-				}
-				bb := bf.Bytes()[:chunk.size()]
-				n := copy(p[base:], bb[lowerUnread:chunk.size()-upperUnread])
-				if int64(n) != expectedSize {
-					return fmt.Errorf("invalid copied data size %d; want %d",
-						n, expectedSize)
-				}
-				return nil
-			})
+		allData[chunk] = &byteWriter{
+			p: ip,
 		}
+
+		// // We missed cache. Take it from remote registry.
+		// // We get the whole chunk here and add it to the cache so that following
+		// // reads against neighboring chunks can take the data without making HTTP requests.
+		// if lowerUnread == 0 && upperUnread == 0 {
+		// 	// We can directly store the result in the given buffer
+		// 	allData[chunk] = &byteWriter{
+		// 		p: p[base : base+chunk.size()],
+		// 	}
+		// } else {
+		// 	// Use temporally buffer for aligning this chunk
+		// 	bf := b.resolver.bufPool.Get().(*bytes.Buffer)
+		// 	putBufs = append(putBufs, bf)
+		// 	bf.Reset()
+		// 	bf.Grow(int(chunk.size()))
+		// 	allData[chunk] = bf
+
+		// 	// Function for committing the buffered chunk into the result slice.
+		// 	commits = append(commits, func() error {
+		// 		if int64(bf.Len()) != chunk.size() {
+		// 			return fmt.Errorf("unexpected data size %d; want %d",
+		// 				bf.Len(), chunk.size())
+		// 		}
+		// 		bb := bf.Bytes()[:chunk.size()]
+		// 		n := copy(p[base:], bb[lowerUnread:chunk.size()-upperUnread])
+		// 		if int64(n) != expectedSize {
+		// 			return fmt.Errorf("invalid copied data size %d; want %d",
+		// 				n, expectedSize)
+		// 		}
+		// 		return nil
+		// 	})
+		// }
 		return nil
 	})
 
@@ -205,12 +216,12 @@ func (b *blob) ReadAt(p []byte, offset int64, opts ...Option) (int, error) {
 		return 0, err
 	}
 
-	// Write all data to the result buffer
-	for _, c := range commits {
-		if err := c(); err != nil {
-			return 0, err
-		}
-	}
+	// // Write all data to the result buffer
+	// for _, c := range commits {
+	// 	if err := c(); err != nil {
+	// 		return 0, err
+	// 	}
+	// }
 
 	// Adjust the buffer size according to the blob size
 	if remain := b.size - offset; int64(len(p)) >= remain {
@@ -316,12 +327,42 @@ type walkFunc func(reg region) error
 // walkChunks walks chunks from begin to end in order in the specified region.
 // specified region must be aligned by chunk size.
 func (b *blob) walkChunks(allRegion region, walkFn walkFunc) error {
-	if allRegion.b%b.chunkSize != 0 {
-		return fmt.Errorf("region (%d, %d) must be aligned by chunk size",
-			allRegion.b, allRegion.e)
+	if allRegion.b > b.size {
+		return nil
 	}
-	for i := allRegion.b; i <= allRegion.e && i < b.size; i += b.chunkSize {
+	// if allRegion.b%b.chunkSize != 0 {
+	// 	return fmt.Errorf("region (%d, %d) must be aligned by chunk size",
+	// 		allRegion.b, allRegion.e)
+	// }
+
+	var (
+		begin = allRegion.b
+		end = allRegion.e
+	)
+
+	if pad := begin%b.chunkSize; pad != 0 {
+		beforePad := b.chunkSize - pad
+		reg := region{begin, begin + beforePad - 1}
+		if reg.e > end {
+			reg.e = end
+		}
+		if reg.e >= b.size {
+			reg.e = b.size - 1
+		}
+		if reg.e + 1 < reg.b {
+			panic(fmt.Sprintf("%d, %d: (begin, end) = (%d, %d), size = %d, beforePad=%d", reg.e + 1, reg.b, begin, end, b.size, beforePad))
+		}
+		if err := walkFn(reg); err != nil {
+			return err
+		}
+		begin = begin + beforePad
+	}
+
+	for i := begin; i <= end && i < b.size; i += b.chunkSize {
 		reg := region{i, i + b.chunkSize - 1}
+		if reg.e > end {
+			reg.e = end
+		}
 		if reg.e >= b.size {
 			reg.e = b.size - 1
 		}
@@ -343,13 +384,13 @@ func (w *byteWriter) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-func floor(n int64, unit int64) int64 {
-	return (n / unit) * unit
-}
+// func floor(n int64, unit int64) int64 {
+// 	return (n / unit) * unit
+// }
 
-func ceil(n int64, unit int64) int64 {
-	return (n/unit + 1) * unit
-}
+// func ceil(n int64, unit int64) int64 {
+// 	return (n/unit + 1) * unit
+// }
 
 func positive(n int64) int64 {
 	if n < 0 {

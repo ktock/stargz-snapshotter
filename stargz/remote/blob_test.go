@@ -213,7 +213,8 @@ func checkCache(t *testing.T, r *blob, offset int64, size int64) {
 
 func checkAllCached(t *testing.T, r *blob, offset, size int64) {
 	cn := 0
-	whole := region{floor(offset, r.chunkSize), ceil(offset+size-1, r.chunkSize) - 1}
+	// whole := region{floor(offset, r.chunkSize), ceil(offset+size-1, r.chunkSize) - 1}
+	whole := region{offset, offset+size-1}
 	if err := r.walkChunks(whole, func(reg region) error {
 		data := make([]byte, reg.size())
 		n, err := r.cache.FetchAt(r.fetcher.genID(reg), 0, data)

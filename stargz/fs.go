@@ -258,28 +258,30 @@ func (fs *filesystem) Mount(ctx context.Context, mountpoint string, labels map[s
 		return err
 	}
 
+	log.G(ctx).Debugf("verfying...")
+	l.skipVerify()
 	// Verify this layer using the TOC JSON digest passed through label.
-	if tocDigest, ok := labels[verify.TOCJSONDigestAnnotation]; ok {
-		dgst, err := digest.Parse(tocDigest)
-		if err != nil {
-			log.G(ctx).WithError(err).Debugf("failed to parse passed TOC digest %q", dgst)
-			return errors.Wrapf(err, "invalid TOC digest: %v", tocDigest)
-		}
-		if err := l.verify(dgst); err != nil {
-			log.G(ctx).WithError(err).Debugf("invalid layer")
-			return errors.Wrapf(err, "invalid stargz layer")
-		}
-		log.G(ctx).Debugf("verified")
-	} else if _, ok := labels[TargetSkipVerifyLabel]; ok && fs.allowNoVerification {
-		// If unverified layer is allowed, use it with warning.
-		// This mode is for legacy stargz archives which don't contain digests
-		// necessary for layer verification.
-		l.skipVerify()
-		log.G(ctx).Warningf("No verification is held for layer")
-	} else {
-		// Verification must be done. Don't mount this layer.
-		return fmt.Errorf("digest of TOC JSON must be passed")
-	}
+	// if tocDigest, ok := labels[verify.TOCJSONDigestAnnotation]; ok {
+	// 	dgst, err := digest.Parse(tocDigest)
+	// 	if err != nil {
+	// 		log.G(ctx).WithError(err).Debugf("failed to parse passed TOC digest %q", dgst)
+	// 		return errors.Wrapf(err, "invalid TOC digest: %v", tocDigest)
+	// 	}
+	// 	if err := l.verify(dgst); err != nil {
+	// 		log.G(ctx).WithError(err).Debugf("invalid layer")
+	// 		return errors.Wrapf(err, "invalid stargz layer")
+	// 	}
+	// 	log.G(ctx).Debugf("verified")
+	// } else if _, ok := labels[TargetSkipVerifyLabel]; ok && fs.allowNoVerification {
+	// 	// If unverified layer is allowed, use it with warning.
+	// 	// This mode is for legacy stargz archives which don't contain digests
+	// 	// necessary for layer verification.
+	// 	l.skipVerify()
+	// 	log.G(ctx).Warningf("No verification is held for layer")
+	// } else {
+	// 	// Verification must be done. Don't mount this layer.
+	// 	return fmt.Errorf("digest of TOC JSON must be passed")
+	// }
 	layerReader, err := l.reader()
 	if err != nil {
 		log.G(ctx).WithError(err).Warningf("failed to get reader for layer")

@@ -216,6 +216,8 @@ type tocInfo struct {
 // scanning the entire blob leveraging its footer. The parsed TOC JSON contains
 // additional fields usable for chunk-level content verification.
 func extractTOCJSON(sgz *io.SectionReader) (toc *tocInfo, err error) {
+	fmt.Println("extracting...")
+	defer fmt.Println("done")
 	// Parse stargz footer and get the offset of TOC JSON
 	if sgz.Size() < stargz.FooterSize {
 		return nil, errors.New("stargz data is too small")
