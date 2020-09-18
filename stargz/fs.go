@@ -43,7 +43,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -292,13 +291,6 @@ func (fs *filesystem) Mount(ctx context.Context, mountpoint string, labels map[s
 	fs.layer[mountpoint] = l
 	fs.layerMu.Unlock()
 
-	// RoundTripper only used for pre-/background-fetch.
-	// We use a separated transport because we don't want these fetching
-	// functionalities to disturb other HTTP-related operations
-	fetchTr := lazyTransport(func() (http.RoundTripper, error) {
-		return l.blob.Authn(http.DefaultTransport.(*http.Transport).Clone())
-	})
-
 	// Prefetch this layer. We prefetch several layers in parallel. The first
 	// Check() for this layer waits for the prefetch completion. We recreate
 	// RoundTripper to avoid disturbing other NW-related operations.
@@ -308,12 +300,7 @@ func (fs *filesystem) Mount(ctx context.Context, mountpoint string, labels map[s
 			defer l.donePrefetch()
 			fs.backgroundTaskManager.DoPrioritizedTask()
 			defer fs.backgroundTaskManager.DonePrioritizedTask()
-			tr, err := fetchTr()
-			if err != nil {
-				log.G(ctx).WithError(err).Debug("failed to prepare transport for prefetch")
-				return
-			}
-			if err := l.prefetch(prefetchSize, remote.WithRoundTripper(tr)); err != nil {
+			if err := l.prefetch(prefetchSize); err != nil {
 				log.G(ctx).WithError(err).Debug("failed to prefetched layer")
 				return
 			}
@@ -329,17 +316,10 @@ func (fs *filesystem) Mount(ctx context.Context, mountpoint string, labels map[s
 	go func() {
 		br := io.NewSectionReader(readerAtFunc(func(p []byte, offset int64) (retN int, retErr error) {
 			fs.backgroundTaskManager.InvokeBackgroundTask(func(ctx context.Context) {
-				tr, err := fetchTr()
-				if err != nil {
-					log.G(ctx).WithError(err).Debug("failed to prepare transport for background fetch")
-					retN, retErr = 0, err
-					return
-				}
 				retN, retErr = l.blob.ReadAt(
 					p,
 					offset,
 					remote.WithContext(ctx),              // Make cancellable
-					remote.WithRoundTripper(tr),          // Use dedicated Transport
 					remote.WithCacheOpts(cache.Direct()), // Do not pollute mem cache
 				)
 			}, 120*time.Second)
@@ -534,26 +514,6 @@ func (fs *filesystem) parseLabels(labels map[string]string) (rRef, rDigest strin
 	}
 
 	return
-}
-
-func lazyTransport(trFunc func() (http.RoundTripper, error)) func() (http.RoundTripper, error) {
-	var (
-		tr   http.RoundTripper
-		trMu sync.Mutex
-	)
-	return func() (http.RoundTripper, error) {
-		trMu.Lock()
-		defer trMu.Unlock()
-		if tr != nil {
-			return tr, nil
-		}
-		gotTr, err := trFunc()
-		if err != nil {
-			return nil, err
-		}
-		tr = gotTr
-		return tr, nil
-	}
 }
 
 func newResolveResult(resolveFunc func() (*layer, error)) *resolveResult {
