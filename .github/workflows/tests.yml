@@ -1,80 +1,24 @@
-name: Tests
-on: [push, pull_request]
+name: Curl
+on: push
 
 jobs:
   build:
     runs-on: ubuntu-18.04
-    name: Build
+    name: curl to repos
+    env:
+      GHCR_REPO: stargz-containers/python
+      DOCKER_REPO: ktokunaga/python
+      TARGET_BLOB: sha256:d1227b580b0e22493a4a286295606753fd5999db8b81df9082ced4b51d122406
     steps:
-    - uses: actions/checkout@v2
-    - name: Build all
-      run: ./script/util/make.sh build -j2
-  test:
-    runs-on: ubuntu-18.04
-    name: Test
-    steps:
-    - uses: actions/checkout@v2
-    - name: Test all
-      run: ./script/util/make.sh test-all -j2
-  linter:
-    runs-on: ubuntu-18.04
-    name: Linter
-    steps:
-    - uses: actions/checkout@v2
-      with:
-        fetch-depth: '0'
-    - name: Run Linter
-      run: ./script/util/make.sh install-check-tools check
-  integration:
-    runs-on: ubuntu-18.04
-    name: Integration
-    steps:
-    - name: Install htpasswd for setting up private registry
-      run: sudo apt-get update -y && sudo apt-get --no-install-recommends install -y apache2-utils
-    - uses: actions/checkout@v2
-    - name: Run integration test
-      run: make integration
-  test-optimize:
-    runs-on: ubuntu-18.04
-    name: Optimize
-    steps:
-    - name: Install htpasswd for setting up private registry
-      run: sudo apt-get update -y && sudo apt-get --no-install-recommends install -y apache2-utils
-    - uses: actions/checkout@v2
-    - name: Run test for optimize subcommand of ctr-remote
-      run: make test-optimize
-  test-pullsecrets:
-    runs-on: ubuntu-18.04
-    name: PullSecrets
-    steps:
-    - name: Install htpasswd for setting up private registry
-      run: sudo apt-get update -y && sudo apt-get --no-install-recommends install -y apache2-utils
-    - uses: actions/checkout@v2
-    - name: Run test for pulling image from private registry on Kubernetes
-      run: make test-pullsecrets
-  test-cri:
-    runs-on: ubuntu-18.04
-    name: CRIValidation
-    steps:
-    - uses: actions/checkout@v2
-    - name: Varidate the runtime through CRI
-      run: make test-cri
-
-  #
-  # Project checks
-  # NOTE: Jobs for project checks commonly used in containerd projects
-  # See https://github.com/containerd/project-checks
-  #
-
-  project:
-    name: Project Checks
-    runs-on: ubuntu-18.04
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v2
-        with:
-          path: src/github.com/containerd/stargz-snapshotter
-          fetch-depth: 25
-      - uses: containerd/project-checks@v1
-        with:
-          working-directory: src/github.com/containerd/stargz-snapshotter
+    - name: Get instance information
+      run: |
+          curl -H "Metadata:true" "http://169.254.169.254/metadata/instance?api-version=2019-11-01" | \
+          jq '{ location : .compute.location, vmSize : .compute.vmSize }'
+    - name: curl to ghcr.io
+      run: |
+          LOCATION=$(curl -v -H "Range: bytes=0-1" -H "Authorization: $(curl https://ghcr.io/token?scope=repository:${{ env.GHCR_REPO }}:pull | jq -r '.token')" https://ghcr.io/v2/${{ env.GHCR_REPO }}/blobs/${{ env.TARGET_BLOB }} 2>&1 | grep Location | sed -E 's/.*(http.*)/\1/g' | sed -e "s/[\r\n]\+//g")
+          for i in {1..3}; do time curl -H "Range: bytes=0-1" "${LOCATION}" ; done
+    - name: curl to docker.io
+      run: |
+          LOCATION=$(curl -v -H "Range: bytes=0-1" -H "Authorization: Bearer $(curl "https://auth.docker.io/token?service=registry.docker.io&scope=repository:${{ env.DOCKER_REPO }}:pull" | jq -r '.access_token')" https://registry-1.docker.io/v2/${{ env.DOCKER_REPO }}/blobs/${{ env.TARGET_BLOB }} 2>&1 | grep Location | sed -E 's/.*(http.*)/\1/g' | sed -e "s/[\r\n]\+//g")
+          for i in {1..3}; do time curl -H "Range: bytes=0-1" "${LOCATION}" ; done
