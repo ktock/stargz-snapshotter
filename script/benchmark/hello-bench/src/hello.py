@@ -102,12 +102,17 @@ class BenchRunner:
                                    mount=[('go', '/go/src')]),
                  'jruby:9.2.8.0': RunArgs(stdin='jruby -e "puts \\\"hello\\\""; exit\n'),
                  'r-base:3.6.1': RunArgs(stdin='sprintf("hello")\nq()\n', stdin_sh='R --no-save'),
+                 'golang:1.15.3-buster': RunArgs(stdin='printf "package main ; import \\\"fmt\\\" ; func main() { fmt.Println(\\\"hello\\\") }" > /tmp/main.go ; go build -o /tmp/hello /tmp/main.go ; /tmp/hello ; exit\n'),
+                 'gcc:10.2.0': RunArgs(stdin='printf "#include <stdio.h>\\nint main(int argc, char *argv[]) { printf(\\\"hello\\\"); }" > /tmp/main.c ; gcc -static -o /tmp/hello /tmp/main.c ; /tmp/hello ; exit\n'),
     }
 
     CMD_ARG = {'perl:5.30': RunArgs(arg='perl -e \'print("hello\\n")\''),
                'python:3.7': RunArgs(arg='python -c \'print("hello")\''),
+               'python:3.7-slim': RunArgs(arg='python -c \'print("hello")\''),
                'pypy:3.5': RunArgs(arg='pypy3 -c \'print("hello")\''),
                'node:13.13.0': RunArgs(arg='node -e \'console.log("hello")\''),
+               'python:3.9.0-buster': RunArgs(arg='pip install pip'),
+               'python:3.9.0-slim': RunArgs(arg='python -c \'print("hello")\''),
     }
 
     # complete listing
@@ -117,6 +122,7 @@ class BenchRunner:
                  Bench('rethinkdb:2.3.6', 'database'),
                  Bench('redis:5.0.5', 'database'),
                  Bench('python:3.7', 'language'),
+                 Bench('python:3.7-slim', 'language'),
                  Bench('golang:1.12.9', 'language'),
                  Bench('gcc:9.2.0', 'language'),
                  Bench('jruby:9.2.8.0', 'language'),
@@ -128,6 +134,10 @@ class BenchRunner:
                  Bench('drupal:8.7.6'),
                  Bench('jenkins:2.60.3'),
                  Bench('node:13.13.0'),
+                 Bench('golang:1.15.3-buster'),
+                 Bench('gcc:10.2.0'),
+                 Bench('python:3.9.0-buster'),
+                 Bench('python:3.9.0-slim'),
              ]])
 
     def __init__(self, repository='docker.io/library', mode=LEGACY_MODE, optimizer=DEFAULT_OPTIMIZER):

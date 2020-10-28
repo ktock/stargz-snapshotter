@@ -37,14 +37,22 @@ function check_remote_snapshots {
     local LOG_FILE="${1}"
     local REMOTE=0
     local LOCAL=0
+    local REMOTE_RAW=0
+    local LOCAL_RAW=0
 
-    REMOTE=$(jq -r 'select(."'"${LOG_REMOTE_SNAPSHOT}"'" == "true")' "${LOG_FILE}" | wc -l)
-    LOCAL=$(jq -r 'select(."'"${LOG_REMOTE_SNAPSHOT}"'" == "false")' "${LOG_FILE}" | wc -l)
-    if [[ ${LOCAL} -gt 0 ]] ; then
-        echo "some local snapshots creation have been reported (local:${LOCAL},remote:${REMOTE})"
+    REMOTE=$(jq -r -R 'fromjson? | select(."'"${LOG_REMOTE_SNAPSHOT}"'" == "true")' "${LOG_FILE}" | wc -l)
+    REMOTE_RAW=$(cat ${LOG_FILE} | grep "${LOG_REMOTE_SNAPSHOT}=true" | wc -l || true) # quiet even on unmatch
+    LOCAL=$(jq -r -R 'fromjson? | select(."'"${LOG_REMOTE_SNAPSHOT}"'" == "false")' "${LOG_FILE}" | wc -l)
+    LOCAL_RAW=$(cat ${LOG_FILE} | grep "${LOG_REMOTE_SNAPSHOT}=false" | wc -l || true) # quiet even on unmatch
+    if [[ ${LOCAL} -gt 0 ]] || [[ ${LOCAL_RAW} -gt 0 ]] ; then
+        echo "some local snapshots creation have been reported"
+        echo "  local:  ${LOCAL}(from JSON log) , ${LOCAL_RAW}(from raw log)"
+        echo "  remote: ${REMOTE}(from JSON log), ${REMOTE_RAW}(from raw log)"
         return 1
-    elif [[ ${REMOTE} -gt 0 ]] ; then
-        echo "all layers have been reported as remote snapshots (local:${LOCAL},remote:${REMOTE})"
+    elif [[ ${REMOTE} -gt 0 ]] || [[ ${REMOTE_RAW} -gt 0 ]] ; then
+        echo "all layers have been reported as remote snapshots"
+        echo "  local: ${LOCAL}(from JSON log), ${LOCAL_RAW}(from raw log)"
+        echo "  remote: ${REMOTE}(from JSON log), ${REMOTE_RAW}(from raw log)"
         return 0
     else
         echo "no log for checking remote snapshot was provided; Is the log-level = debug?"
