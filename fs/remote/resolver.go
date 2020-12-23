@@ -51,6 +51,7 @@ import (
 const (
 	defaultChunkSize        = 50000
 	defaultValidIntervalSec = 60
+	defaultFetchTimeout     = 300
 )
 
 func NewResolver(cache cache.BlobCache, cfg config.BlobConfig) *Resolver {
@@ -62,6 +63,9 @@ func NewResolver(cache cache.BlobCache, cfg config.BlobConfig) *Resolver {
 	}
 	if cfg.CheckAlways {
 		cfg.ValidInterval = 0
+	}
+	if cfg.FetchTimeout == 0 {
+		cfg.FetchTimeout = defaultFetchTimeout
 	}
 
 	return &Resolver{
@@ -94,6 +98,7 @@ func (r *Resolver) Resolve(ctx context.Context, hosts docker.RegistryHosts, refs
 		lastCheck:     time.Now(),
 		checkInterval: time.Duration(r.blobConfig.ValidInterval) * time.Second,
 		resolver:      r,
+		fetchTimeout:  time.Duration(r.blobConfig.FetchTimeout) * time.Second,
 	}, nil
 }
 
