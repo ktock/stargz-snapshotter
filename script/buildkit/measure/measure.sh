@@ -80,8 +80,7 @@ function build {
     /usr/bin/time --output="${RESULT}" -f '%e' buildctl build --progress=plain \
          --frontend=dockerfile.v0 \
          --local context="${TARGET_CONTEXT}" \
-         --local dockerfile="${TARGET_DOCKERFILE}" \
-         --output type=oci > "${OUTPUT}"
+         --local dockerfile="${TARGET_DOCKERFILE}"
     local ELAPSED=$(cat "${RESULT}")
     rm "${RESULT}"
     rm "${OUTPUT}"
