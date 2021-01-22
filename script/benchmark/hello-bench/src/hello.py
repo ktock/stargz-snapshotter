@@ -93,6 +93,7 @@ class BenchRunner:
                     'drupal:8.7.6': RunArgs(waitline='apache2 -D FOREGROUND'),
                     'jenkins:2.60.3': RunArgs(waitline='Jenkins is fully up and running'),
                     'redis:5.0.5': RunArgs(waitline='Ready to accept connections'),
+                    'tomcat:10.0.0-jdk15-openjdk-buster': RunArgs(waitline='Server startup'),
     }
 
     CMD_STDIN = {'php:7.3.8':  RunArgs(stdin='php -r "echo \\\"hello\\n\\\";"; exit\n'),
@@ -128,6 +129,7 @@ class BenchRunner:
                  Bench('drupal:8.7.6'),
                  Bench('jenkins:2.60.3'),
                  Bench('node:13.13.0'),
+                 Bench('tomcat:10.0.0-jdk15-openjdk-buster', 'web-server'),
              ]])
 
     def __init__(self, repository='docker.io/library', mode=LEGACY_MODE, optimizer=DEFAULT_OPTIMIZER):
