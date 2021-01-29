@@ -12,7 +12,7 @@ jobs:
       BENCHMARK_LOG_DIR: ${{ github.workspace }}/log/
       BENCHMARK_RESULT_DIR: ${{ github.workspace }}/benchmark/
       BENCHMARK_REGISTRY: ghcr.io
-      BENCHMARK_USER: stargz-containers
+      BENCHMARK_USER: ktock
       BENCHMARK_TARGETS: python:3.9 gcc:10.2.0 postgres:13.1 tomcat:10.0.0-jdk15-openjdk-buster
       BENCHMARK_SAMPLES_NUM: 5
       BENCHMARK_PERCENTILE: 95
