@@ -112,6 +112,7 @@ function reboot_containerd {
     retry ls "${REMOTE_SNAPSHOTTER_SOCKET}"
     containerd --log-level debug --config=/etc/containerd/config.toml &
     retry ctr version
+    ps auxww
 }
 
 echo "Logging into the registry..."
@@ -153,12 +154,14 @@ optimize "${REGISTRY_HOST}:5000/alpine:3.10.2" "${REGISTRY_ALT_HOST}:5000/alpine
 echo "Testing refreshing and mirror..."
 
 reboot_containerd
+ps auxww
 echo "Getting image with normal snapshotter..."
 ctr-remote images pull --user "${DUMMYUSER}:${DUMMYPASS}" "${REGISTRY_HOST}:5000/alpine:esgz"
 ctr-remote run --rm "${REGISTRY_HOST}:5000/alpine:esgz" test tar -c /usr | tar -xC "${USR_ORG}"
 
 echo "Getting image with stargz snapshotter..."
 echo -n "" > "${LOG_FILE}"
+ps auxww
 ctr-remote images rpull --user "${DUMMYUSER}:${DUMMYPASS}" "${REGISTRY_HOST}:5000/alpine:esgz"
 check_remote_snapshots "${LOG_FILE}"
 
