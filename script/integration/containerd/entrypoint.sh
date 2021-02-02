@@ -162,8 +162,12 @@ ctr-remote run --rm "${REGISTRY_HOST}:5000/alpine:esgz" test tar -c /usr | tar -
 echo "Getting image with stargz snapshotter..."
 echo -n "" > "${LOG_FILE}"
 ps auxww
-ctr-remote images rpull --user "${DUMMYUSER}:${DUMMYPASS}" "${REGISTRY_HOST}:5000/alpine:esgz"
+ctr-remote images rpull --user "${DUMMYUSER}:${DUMMYPASS}" "${REGISTRY_HOST}:5000/alpine:esgz" || true
+echo "DONE"
+ps auxww
 check_remote_snapshots "${LOG_FILE}"
+
+exit 1
 
 REGISTRY_HOST_IP=$(getent hosts "${REGISTRY_HOST}" | awk '{ print $1 }')
 REGISTRY_ALT_HOST_IP=$(getent hosts "${REGISTRY_ALT_HOST}" | awk '{ print $1 }')
