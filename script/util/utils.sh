@@ -52,3 +52,12 @@ function check_remote_snapshots {
         return 1
     fi
 }
+
+# print_versions_info prints version of containerd and runc
+function print_versions_info {
+    echo "===== VERSION INFORMATION ====="
+    containerd --version
+    runc --version
+    echo "==============================="
+    
+}

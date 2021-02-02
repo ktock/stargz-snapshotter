@@ -117,6 +117,8 @@ function reboot_containerd {
     retry ctr snapshots --snapshotter="${PLUGIN}" prepare "connectiontest-dummy-${UNIQUE_SUFFIX}" ""
 }
 
+print_versions_info
+
 echo "Logging into the registry..."
 cp /auth/certs/domain.crt /usr/local/share/ca-certificates
 update-ca-certificates
