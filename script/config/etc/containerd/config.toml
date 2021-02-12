@@ -5,9 +5,10 @@ version = 2
 
 # - Set default runtime handler to v2, which has a per-pod shim
 # - Enable to use stargz snapshotter
+[plugins."io.containerd.grpc.v1.cri"]
+  snapshotter = "stargz"
 [plugins."io.containerd.grpc.v1.cri".containerd]
   default_runtime_name = "runc"
-  snapshotter = "stargz"
   disable_snapshot_annotations = false
 [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
   runtime_type = "io.containerd.runc.v2"
