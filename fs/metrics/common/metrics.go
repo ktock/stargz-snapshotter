@@ -41,7 +41,6 @@ const (
 	StargzHeaderGet     = "stargz_header_get"
 	StargzFooterGet     = "stargz_footer_get"
 	StargzTocGet        = "stargz_toc_get"
-	DeserializeTocJSON  = "stargz_toc_json_deserialize"
 	PrefetchesCompleted = "all_prefetches_completed"
 )
 

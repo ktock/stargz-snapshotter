@@ -263,7 +263,7 @@ func (n *layernode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 		if name == blobLink {
 			return n.NewInode(ctx, &blobnode{l: l}, layerToAttr(l, &out.Attr)), 0
 		}
-		root, err := l.RootNode()
+		root, err := l.RootNode(l.id)
 		if err != nil {
 			log.G(ctx).WithField(remoteSnapshotLogKey, prepareFailed).
 				WithField("layerdigest", n.layer.Digest).

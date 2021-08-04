@@ -42,6 +42,7 @@ import (
 	"github.com/containerd/stargz-snapshotter/fs/reader"
 	"github.com/containerd/stargz-snapshotter/fs/remote"
 	"github.com/containerd/stargz-snapshotter/fs/source"
+	"github.com/containerd/stargz-snapshotter/metadata"
 	"github.com/containerd/stargz-snapshotter/task"
 	"github.com/containerd/stargz-snapshotter/util/lrucache"
 	"github.com/containerd/stargz-snapshotter/util/namedmutex"
@@ -50,6 +51,7 @@ import (
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+	bolt "go.etcd.io/bbolt"
 )
 
 const (
@@ -66,7 +68,7 @@ type Layer interface {
 	Info() Info
 
 	// RootNode returns the root node of this layer.
-	RootNode() (fusefs.InodeEmbedder, error)
+	RootNode(baseInode uint32) (fusefs.InodeEmbedder, error)
 
 	// Check checks if the layer is still connectable.
 	Check() error
@@ -111,6 +113,7 @@ type Info struct {
 
 // Resolver resolves the layer location and provieds the handler of that layer.
 type Resolver struct {
+	db                    *bolt.DB
 	rootDir               string
 	resolver              *remote.Resolver
 	prefetchTimeout       time.Duration
@@ -157,7 +160,16 @@ func NewResolver(root string, backgroundTaskManager *task.BackgroundTaskManager,
 		logrus.WithField("key", key).Debugf("cleaned up blob")
 	}
 
+	if err := os.MkdirAll(root, 0700); err != nil {
+		return nil, err
+	}
+	db, err := bolt.Open(filepath.Join(root, "metadata.db"), 0666, nil)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Resolver{
+		db:                    db,
 		rootDir:               root,
 		resolver:              remote.NewResolver(cfg.BlobConfig),
 		layerCache:            layerCache,
@@ -276,18 +288,15 @@ func (r *Resolver) Resolve(ctx context.Context, hosts source.RegistryHosts, refs
 		return blobR.ReadAt(p, offset)
 	}), 0, blobR.Size())
 	// define telemetry hooks to measure latency metrics inside estargz package
-	telemetry := estargz.Telemetry{
+	telemetry := metadata.Telemetry{
 		GetFooterLatency: func(start time.Time) {
 			commonmetrics.MeasureLatency(commonmetrics.StargzFooterGet, desc.Digest, start)
 		},
 		GetTocLatency: func(start time.Time) {
 			commonmetrics.MeasureLatency(commonmetrics.StargzTocGet, desc.Digest, start)
 		},
-		DeserializeTocLatency: func(start time.Time) {
-			commonmetrics.MeasureLatency(commonmetrics.DeserializeTocJSON, desc.Digest, start)
-		},
 	}
-	vr, err := reader.NewReader(sr, fsCache, &telemetry)
+	vr, err := reader.NewReader(r.db, sr, fsCache, &telemetry)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to read layer")
 	}
@@ -434,13 +443,17 @@ func (l *layer) Prefetch(prefetchSize int64) error {
 	if l.r == nil {
 		return fmt.Errorf("layer hasn't been verified yet")
 	}
-	lr := l.r
-	if _, ok := lr.Lookup(estargz.NoPrefetchLandmark); ok {
+	rootID := l.r.Metadata().RootID()
+	if _, _, err := l.r.Metadata().GetChild(rootID, estargz.NoPrefetchLandmark); err == nil {
 		// do not prefetch this layer
 		return nil
-	} else if e, ok := lr.Lookup(estargz.PrefetchLandmark); ok {
+	} else if id, _, err := l.r.Metadata().GetChild(rootID, estargz.PrefetchLandmark); err == nil {
+		offset, err := l.r.Metadata().GetOffset(id)
+		if err != nil {
+			return errors.Wrapf(err, "failed to get offset of prefetch landmark")
+		}
 		// override the prefetch size with optimized value
-		prefetchSize = e.Offset
+		prefetchSize = offset
 	} else if prefetchSize > l.blob.Size() {
 		// adjust prefetch size not to exceed the whole layer size
 		prefetchSize = l.blob.Size()
@@ -455,8 +468,8 @@ func (l *layer) Prefetch(prefetchSize int64) error {
 	l.prefetchSize = prefetchSize
 
 	// Cache uncompressed contents of the prefetched range
-	if err := lr.Cache(reader.WithFilter(func(e *estargz.TOCEntry) bool {
-		return e.Offset < prefetchSize // Cache only prefetch target
+	if err := l.r.Cache(reader.WithFilter(func(offset int64) bool {
+		return offset < prefetchSize // Cache only prefetch target
 	})); err != nil {
 		return errors.Wrap(err, "failed to cache prefetched layer")
 	}
@@ -500,14 +513,14 @@ func (l *layerRef) Done() {
 	l.done()
 }
 
-func (l *layer) RootNode() (fusefs.InodeEmbedder, error) {
+func (l *layer) RootNode(baseInode uint32) (fusefs.InodeEmbedder, error) {
 	if l.isClosed() {
 		return nil, fmt.Errorf("layer is already closed")
 	}
 	if l.r == nil {
 		return nil, fmt.Errorf("layer hasn't been verified yet")
 	}
-	return newNode(l.desc.Digest, l.r, l.blob)
+	return newNode(l.desc.Digest, l.r, l.blob, baseInode)
 }
 
 func (l *layer) ReadAt(p []byte, offset int64, opts ...remote.Option) (int, error) {

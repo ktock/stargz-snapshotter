@@ -13,8 +13,9 @@ require (
 	github.com/docker/docker v20.10.7+incompatible // indirect
 	github.com/docker/docker-credential-helpers v0.6.4 // indirect
 	github.com/docker/go-metrics v0.0.1
+	github.com/goccy/go-json v0.7.4
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da
-	github.com/hanwen/go-fuse/v2 v2.1.0
+	github.com/hanwen/go-fuse/v2 v2.1.1-0.20210611132105-24a1dfe6b4f8
 	github.com/hashicorp/go-multierror v1.1.1
 	github.com/moby/sys/mountinfo v0.4.1
 	github.com/opencontainers/go-digest v1.0.0
@@ -26,6 +27,7 @@ require (
 	github.com/rs/xid v1.3.0
 	github.com/sirupsen/logrus v1.8.1
 	github.com/urfave/cli v1.22.2
+	go.etcd.io/bbolt v1.3.6
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
 	golang.org/x/sys v0.0.0-20210616094352-59db8d763f22
 	google.golang.org/grpc v1.40.0

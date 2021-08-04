@@ -27,6 +27,10 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,9 +40,11 @@ import (
 	"github.com/containerd/stargz-snapshotter/fs/reader"
 	"github.com/containerd/stargz-snapshotter/fs/remote"
 	"github.com/containerd/stargz-snapshotter/fs/source"
+	"github.com/containerd/stargz-snapshotter/metadata"
 	"github.com/containerd/stargz-snapshotter/util/testutil"
 	digest "github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	bolt "go.etcd.io/bbolt"
 )
 
 const (
@@ -56,8 +62,12 @@ func TestPrefetch(t *testing.T) {
 		if l.r == nil {
 			t.Fatalf("layer hasn't been verified yet")
 		}
-		if e, ok := l.r.Lookup(estargz.PrefetchLandmark); ok {
-			return e.Offset
+		if id, _, err := l.r.Metadata().GetChild(l.r.Metadata().RootID(), estargz.PrefetchLandmark); err == nil {
+			offset, err := l.r.Metadata().GetOffset(id)
+			if err != nil {
+				t.Fatalf("failed to get offset of prefetch landmark")
+			}
+			return offset
 		}
 		return defaultPrefetchSize
 	}
@@ -116,8 +126,20 @@ func TestPrefetch(t *testing.T) {
 			blob := newBlob(sr)
 			mcache := cache.NewMemoryCache()
 			// define telemetry hooks to measure latency metrics inside estargz package
-			telemetry := estargz.Telemetry{}
-			vr, err := reader.NewReader(sr, mcache, &telemetry)
+			telemetry := metadata.Telemetry{}
+			f, err := ioutil.TempFile("", "layertestdb")
+			if err != nil {
+				t.Fatalf("failed to prepare DB tmp file: %v", err)
+			}
+			defer func() {
+				os.Remove(f.Name())
+				f.Close()
+			}()
+			db, err := bolt.Open(f.Name(), 0666, nil)
+			if err != nil {
+				t.Fatalf("failed to open db: %v", err)
+			}
+			vr, err := reader.NewReader(db, sr, mcache, &telemetry)
 			if err != nil {
 				t.Fatalf("failed to make stargz reader: %v", err)
 			}
@@ -159,11 +181,15 @@ func TestPrefetch(t *testing.T) {
 				t.Fatalf("failed to get reader from layer: %v", err)
 			}
 			for _, file := range tt.wants {
-				e, ok := lr.Lookup(file)
-				if !ok {
-					t.Fatalf("failed to lookup %q", file)
+				id, err := lookup(lr.Metadata(), file)
+				if err != nil {
+					t.Fatalf("failed to lookup %q: %v", file, err)
 				}
-				wantFile, err := lr.OpenFile(file)
+				e, err := lr.Metadata().GetAttr(id)
+				if err != nil {
+					t.Fatalf("failed to get attr of %q: %v", file, err)
+				}
+				wantFile, err := lr.OpenFile(id)
 				if err != nil {
 					t.Fatalf("failed to open file %q", file)
 				}
@@ -178,6 +204,20 @@ func TestPrefetch(t *testing.T) {
 			}
 		})
 	}
+}
+
+func lookup(r *metadata.Reader, name string) (uint32, error) {
+	name = strings.TrimPrefix(path.Clean("/"+name), "/")
+	if name == "" {
+		return r.RootID(), nil
+	}
+	dir, base := filepath.Split(name)
+	pid, err := lookup(r, dir)
+	if err != nil {
+		return 0, err
+	}
+	id, _, err := r.GetChild(pid, base)
+	return id, err
 }
 
 func chunkNum(data string) int {

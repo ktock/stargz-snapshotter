@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -98,7 +99,13 @@ func NewPool(root string, hosts source.RegistryHosts, cfg config.Config) (*Pool,
 		disableVerification:   cfg.DisableVerification,
 		metricsController:     c,
 		resolveLock:           new(namedmutex.NamedMutex),
+		idMap:                 make(map[uint32]struct{}),
 	}, nil
+}
+
+type layerHandle struct {
+	layer.Layer
+	id uint32
 }
 
 // resolver provides manifests, configs and layers of images.
@@ -120,6 +127,22 @@ type Pool struct {
 	disableVerification   bool
 	metricsController     *layermetrics.Controller
 	resolveLock           *namedmutex.NamedMutex
+
+	idMap   map[uint32]struct{}
+	idMapMu sync.Mutex
+}
+
+func (p *Pool) uniqueID() (id uint32, _ error) {
+	p.idMapMu.Lock()
+	defer p.idMapMu.Unlock()
+	for i := 0; i < 10000; i++ {
+		id = rand.New(rand.NewSource(time.Now().UnixNano())).Uint32()
+		if _, ok := p.idMap[id]; !ok {
+			p.idMap[id] = struct{}{}
+			return
+		}
+	}
+	return 0, fmt.Errorf("cannot generate ID")
 }
 
 func (p *Pool) root() string {
@@ -187,10 +210,10 @@ func (p *Pool) loadLayerInfo(ctx context.Context, refspec reference.Spec, dgst d
 	return layerInfoPath, json.NewEncoder(infoF).Encode(&info)
 }
 
-func (p *Pool) loadLayer(ctx context.Context, refspec reference.Spec, target ocispec.Descriptor, preResolve []ocispec.Descriptor) (layer.Layer, error) {
+func (p *Pool) loadLayer(ctx context.Context, refspec reference.Spec, target ocispec.Descriptor, preResolve []ocispec.Descriptor) (*layerHandle, error) {
 	var (
-		result     layer.Layer
-		resultChan = make(chan layer.Layer)
+		result     *layerHandle
+		resultChan = make(chan *layerHandle)
 		errChan    = make(chan error)
 	)
 
@@ -207,7 +230,11 @@ func (p *Pool) loadLayer(ctx context.Context, refspec reference.Spec, target oci
 			if l.Digest.String() != target.Digest.String() {
 				continue // This is not the target layer; nop
 			}
-			result = gotL
+			id, err := p.uniqueID()
+			if err != nil {
+				return nil, err
+			}
+			result = &layerHandle{gotL, id}
 			continue
 		}
 
@@ -224,10 +251,16 @@ func (p *Pool) loadLayer(ctx context.Context, refspec reference.Spec, target oci
 					refspec, l.Digest)
 				return
 			}
+			id, err := p.uniqueID()
+			if err != nil {
+				errChan <- errors.Wrapf(err, "failed to allocate ID for %q / %q",
+					refspec, l.Digest)
+				return
+			}
 			// Log this as preparation success
 			log.G(ctx).WithField(remoteSnapshotLogKey, prepareSucceeded).
 				Debugf("successfully resolved layer")
-			resultChan <- gotL
+			resultChan <- &layerHandle{gotL, id}
 		}()
 	}
 
@@ -236,7 +269,7 @@ func (p *Pool) loadLayer(ctx context.Context, refspec reference.Spec, target oci
 	}
 
 	// Wait for resolving completion
-	var l layer.Layer
+	var l *layerHandle
 	select {
 	case l = <-resultChan:
 	case err := <-errChan:

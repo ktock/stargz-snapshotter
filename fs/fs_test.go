@@ -66,7 +66,7 @@ type breakableLayer struct {
 }
 
 func (l *breakableLayer) Info() layer.Info                                    { return layer.Info{} }
-func (l *breakableLayer) RootNode() (fusefs.InodeEmbedder, error)             { return nil, nil }
+func (l *breakableLayer) RootNode(uint32) (fusefs.InodeEmbedder, error)       { return nil, nil }
 func (l *breakableLayer) Verify(tocDigest digest.Digest) error                { return nil }
 func (l *breakableLayer) SkipVerify()                                         {}
 func (l *breakableLayer) Prefetch(prefetchSize int64) error                   { return fmt.Errorf("fail") }

@@ -26,13 +26,17 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"io/ioutil"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/containerd/stargz-snapshotter/cache"
 	"github.com/containerd/stargz-snapshotter/estargz"
+	"github.com/containerd/stargz-snapshotter/metadata"
 	"github.com/containerd/stargz-snapshotter/util/testutil"
 	digest "github.com/opencontainers/go-digest"
+	bolt "go.etcd.io/bbolt"
 )
 
 const (
@@ -55,23 +59,42 @@ func TestFailReader(t *testing.T) {
 		ReaderAt: stargzFile,
 		success:  true,
 	}
-	bev := &testTOCEntryVerifier{true}
+	bev := &testChunkVerifier{true}
 	mcache := cache.NewMemoryCache()
-	gr, _, err := newReader(io.NewSectionReader(br, 0, stargzFile.Size()), mcache, bev)
+	gr, closeFn, err := newReader(io.NewSectionReader(br, 0, stargzFile.Size()), mcache, digest.Digest(""), bev)
 	if err != nil {
 		t.Fatalf("Failed to open stargz file: %v", err)
 	}
+	defer closeFn()
+
+	notexist := uint32(0)
+	found := false
+	for i := uint32(0); i < 1000000; i++ {
+		if _, err := gr.Metadata().GetAttr(i); err != nil {
+			notexist, found = i, true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("free ID not found")
+	}
 
 	// tests for opening file
-	_, err = gr.OpenFile("dummy")
+	_, err = gr.OpenFile(notexist)
 	if err == nil {
 		t.Errorf("succeeded to open file but wanted to fail")
 		return
 	}
 
-	fr, err := gr.OpenFile(testFileName)
+	tid, _, err := gr.Metadata().GetChild(gr.Metadata().RootID(), testFileName)
+	if err != nil {
+		t.Errorf("failed to get %q: %v", testFileName, err)
+		return
+	}
+	fr, err := gr.OpenFile(tid)
 	if err != nil {
 		t.Errorf("failed to open file but wanted to succeed: %v", err)
+		return
 	}
 
 	for _, rs := range []bool{true, false} {
@@ -123,11 +146,11 @@ func (br *breakReaderAt) ReadAt(p []byte, off int64) (int, error) {
 	return 0, fmt.Errorf("failed")
 }
 
-type testTOCEntryVerifier struct {
+type testChunkVerifier struct {
 	success bool
 }
 
-func (bev *testTOCEntryVerifier) Verifier(ce *estargz.TOCEntry) (digest.Verifier, error) {
+func (bev *testChunkVerifier) Verifier(id uint32, chunkOffset, chunkSize int64) (digest.Verifier, error) {
 	return &testVerifier{bev.success}, nil
 }
 
@@ -205,10 +228,11 @@ func TestFileReadAt(t *testing.T) {
 							}
 
 							// data we get through a file.
-							f := makeFile(t, []byte(sampleData1)[:filesize], sampleChunkSize)
+							f, closeFn := makeFile(t, []byte(sampleData1)[:filesize], sampleChunkSize)
+							defer closeFn()
 							f.ra = newExceptSectionReader(t, f.ra, cacheExcept...)
 							for _, reg := range cacheExcept {
-								id := genID(f.digest, reg.b, reg.e-reg.b+1)
+								id := genID(f.id, reg.b, reg.e-reg.b+1)
 								w, err := f.cache.Add(id)
 								if err != nil {
 									w.Close()
@@ -242,20 +266,20 @@ func TestFileReadAt(t *testing.T) {
 							cn := 0
 							nr := 0
 							for int64(nr) < wantN {
-								ce, ok := f.r.ChunkEntryForOffset(f.name, offset+int64(nr))
+								chunkOffset, chunkSize, ok := f.r.ChunkEntryForOffset(f.id, offset+int64(nr))
 								if !ok {
 									break
 								}
-								data := make([]byte, ce.ChunkSize)
-								id := genID(f.digest, ce.ChunkOffset, ce.ChunkSize)
+								data := make([]byte, chunkSize)
+								id := genID(f.id, chunkOffset, chunkSize)
 								r, err := f.cache.Get(id)
 								if err != nil {
-									t.Errorf("missed cache of offset=%d, size=%d: %v(got size=%d)", ce.ChunkOffset, ce.ChunkSize, err, n)
+									t.Errorf("missed cache of offset=%d, size=%d: %v(got size=%d)", chunkOffset, chunkSize, err, n)
 									return
 								}
 								defer r.Close()
-								if n, err := r.ReadAt(data, 0); (err != nil && err != io.EOF) || n != int(ce.ChunkSize) {
-									t.Errorf("failed to read cache of offset=%d, size=%d: %v(got size=%d)", ce.ChunkOffset, ce.ChunkSize, err, n)
+								if n, err := r.ReadAt(data, 0); (err != nil && err != io.EOF) || n != int(chunkSize) {
+									t.Errorf("failed to read cache of offset=%d, size=%d: %v(got size=%d)", chunkOffset, chunkSize, err, n)
 									return
 								}
 								nr += n
@@ -291,7 +315,7 @@ func (er *exceptSectionReader) ReadAt(p []byte, offset int64) (int, error) {
 	return er.ra.ReadAt(p, offset)
 }
 
-func makeFile(t *testing.T, contents []byte, chunkSize int) *file {
+func makeFile(t *testing.T, contents []byte, chunkSize int) (*file, func()) {
 	testName := "test"
 	sr, dgst, err := testutil.BuildEStargz([]testutil.TarEntry{
 		testutil.File(testName, string(contents)),
@@ -299,42 +323,49 @@ func makeFile(t *testing.T, contents []byte, chunkSize int) *file {
 	if err != nil {
 		t.Fatalf("failed to build sample estargz")
 	}
-
-	sgz, err := estargz.Open(sr)
-	if err != nil {
-		t.Fatalf("failed to parse converted stargz: %v", err)
-	}
-	ev, err := sgz.VerifyTOC(dgst)
-	if err != nil {
-		t.Fatalf("failed to verify stargz: %v", err)
-	}
-
-	r, _, err := newReader(sr, cache.NewMemoryCache(), ev)
+	r, closeFn, err := newReader(sr, cache.NewMemoryCache(), dgst, nil)
 	if err != nil {
 		t.Fatalf("Failed to open stargz file: %v", err)
 	}
-	ra, err := r.OpenFile(testName)
+	tid, _, err := r.Metadata().GetChild(r.Metadata().RootID(), testName)
+	if err != nil {
+		t.Fatalf("failed to get %q: %v", testName, err)
+	}
+	ra, err := r.OpenFile(tid)
 	if err != nil {
 		t.Fatalf("Failed to open testing file: %v", err)
 	}
 	f, ok := ra.(*file)
 	if !ok {
-		t.Fatalf("invalid type of file %q", testName)
+		t.Fatalf("invalid type of file %q", tid)
 	}
-	return f
+	return f, closeFn
 }
 
-func newReader(sr *io.SectionReader, cache cache.BlobCache, ev estargz.TOCEntryVerifier) (*reader, *estargz.TOCEntry, error) {
+func newReader(sr *io.SectionReader, cache cache.BlobCache, dgst digest.Digest, ev metadata.ChunkVerifier) (*reader, func(), error) {
+	f, err := ioutil.TempFile("", "readertest")
+	if err != nil {
+		return nil, nil, err
+	}
+	db, err := bolt.Open(f.Name(), 0666, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	telemetry := &metadata.Telemetry{}
+	vr, err := NewReader(db, sr, cache, telemetry)
+	if err != nil {
+		return nil, nil, err
+	}
 	var r *reader
-	telemetry := &estargz.Telemetry{}
-	vr, err := NewReader(sr, cache, telemetry)
-	if vr != nil {
+	if ev != nil {
 		r = vr.r
 		r.verifier = ev
+	} else {
+		rr, err := vr.VerifyTOC(dgst)
+		if err != nil {
+			return nil, nil, err
+		}
+		r = rr.(*reader)
 	}
-	root, ok := r.Lookup("")
-	if !ok {
-		return nil, nil, fmt.Errorf("failed to get root")
-	}
-	return r, root, err
+	return r, func() { os.Remove(f.Name()); f.Close() }, err
 }
