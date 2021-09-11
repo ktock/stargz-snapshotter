@@ -95,10 +95,10 @@ services:
     volumes:
     - "${REPO}:/go/src/github.com/containerd/stargz-snapshotter:ro"
     - "/dev/fuse:/dev/fuse"
-    - "containerd-data:/var/lib/containerd:delegated"
-    - "containerd-stargz-grpc-data:/var/lib/containerd-stargz-grpc:delegated"
-    - "containers-data:/var/lib/containers:delegated"
-    - "additional-store-data:/var/lib/stargz-store:delegated"
+    - "containerd-data:/var/lib/containerd"
+    - "containerd-stargz-grpc-data:/var/lib/containerd-stargz-grpc"
+    - "containers-data:/var/lib/containers"
+    - "additional-store-data:/var/lib/stargz-store"
 volumes:
   containerd-data:
   containerd-stargz-grpc-data:

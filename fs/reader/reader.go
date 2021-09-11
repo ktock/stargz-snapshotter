@@ -32,6 +32,7 @@ import (
 	"os"
 	"runtime"
 	"sync"
+	"io/ioutil"
 
 	"github.com/containerd/stargz-snapshotter/cache"
 	"github.com/containerd/stargz-snapshotter/estargz"
@@ -60,16 +61,14 @@ type VerifiableReader struct {
 }
 
 func (vr *VerifiableReader) SkipVerify() Reader {
-	vr.r.verifier = nopChunkVerifier{}
 	return vr.r
 }
 
 func (vr *VerifiableReader) VerifyTOC(tocDigest digest.Digest) (Reader, error) {
-	v, err := vr.r.r.VerifyTOC(tocDigest)
-	if err != nil {
-		return nil, err
+	if actual := vr.r.r.TOCDigest(); tocDigest != actual {
+		return nil, fmt.Errorf("invalid TOC JSON %q; want %q", actual, tocDigest)
 	}
-	vr.r.verifier = v
+	vr.r.verify = true
 	return vr.r, nil
 }
 
@@ -134,10 +133,16 @@ type reader struct {
 	sr       *io.SectionReader
 	cache    cache.BlobCache
 	bufPool  sync.Pool
-	verifier metadata.ChunkVerifier
 
 	closed   bool
 	closedMu sync.Mutex
+
+	verify bool
+}
+
+type Attr struct {
+	ID uint32
+	metadata.Attr
 }
 
 func (gr *reader) Metadata() *metadata.Reader {
@@ -148,16 +153,15 @@ func (gr *reader) OpenFile(id uint32) (io.ReaderAt, error) {
 	if gr.isClosed() {
 		return nil, fmt.Errorf("reader is already closed")
 	}
-	sr, err := gr.r.OpenFile(id)
+	var fr *metadata.FileReader
+	fr, err := gr.r.OpenFile(id)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to open file %d", id)
 	}
 	return &file{
-		id:    id,
-		r:     gr.r,
-		cache: gr.cache,
-		ra:    sr,
-		gr:    gr,
+		id: id,
+		fr: fr,
+		gr: gr,
 	}, nil
 }
 
@@ -216,6 +220,19 @@ func (gr *reader) isClosed() bool {
 	return closed
 }
 
+// verifier returns digest.Verifier from the chunk digest string if verification is required. If isn't,
+// returns nil.
+func (gr *reader) verifier(chunkDigestStr string) (digest.Verifier, error) {
+	if gr.verify {
+		chunkDigest, err := digest.Parse(chunkDigestStr)
+		if err != nil {
+			return nil, errors.Wrap(err, "invalid chunk: no digset is recorded")
+		}
+		return chunkDigest.Verifier(), nil
+	}
+	return nil, nil
+}
+
 func (gr *reader) cacheWithReader(ctx context.Context, currentDepth int, eg *errgroup.Group, sem *semaphore.Weighted, dirID uint32, r *metadata.Reader, filter func(int64) bool, opts ...cache.Option) (rErr error) {
 	if currentDepth > maxWalkDepth {
 		return fmt.Errorf("tree is too deep (depth:%d)", currentDepth)
@@ -259,7 +276,7 @@ func (gr *reader) cacheWithReader(ctx context.Context, currentDepth int, eg *err
 			return true
 		}
 
-		sr, err := r.OpenFile(id)
+		fr, err := r.OpenFile(id)
 		if err != nil {
 			rErr = err
 			return false
@@ -267,7 +284,7 @@ func (gr *reader) cacheWithReader(ctx context.Context, currentDepth int, eg *err
 
 		var nr int64
 		for nr < e.Size {
-			chunkOffset, chunkSize, ok := r.ChunkEntryForOffset(id, nr)
+			chunkOffset, chunkSize, chunkDigestStr, ok := fr.ChunkEntryForOffset(nr)
 			if !ok {
 				break
 			}
@@ -288,13 +305,7 @@ func (gr *reader) cacheWithReader(ctx context.Context, currentDepth int, eg *err
 				}
 
 				// missed cache, needs to fetch and add it to the cache
-				cr := io.NewSectionReader(sr, chunkOffset, chunkSize)
-				v, err := gr.verifier.Verifier(id, chunkOffset, chunkSize)
-				if err != nil {
-					return errors.Wrapf(err, "verifier not found %q(off:%d,size:%d)",
-						name, chunkOffset, chunkSize)
-				}
-				br := bufio.NewReaderSize(io.TeeReader(cr, v), int(chunkSize))
+				br := bufio.NewReaderSize(io.NewSectionReader(fr, chunkOffset, chunkSize), int(chunkSize))
 				if _, err := br.Peek(int(chunkSize)); err != nil {
 					return fmt.Errorf("cacheWithReader.peek: %v", err)
 				}
@@ -303,16 +314,26 @@ func (gr *reader) cacheWithReader(ctx context.Context, currentDepth int, eg *err
 					return err
 				}
 				defer w.Close()
-				if _, err := io.CopyN(w, br, chunkSize); err != nil {
+				v, err := gr.verifier(chunkDigestStr)
+				if err != nil {
+					return errors.Wrapf(err, "invalid chunk")
+				}
+				tee := ioutil.Discard
+				if v != nil {
+					tee = io.Writer(v) // verification is required
+				}
+				if _, err := io.CopyN(w, io.TeeReader(br, tee), chunkSize); err != nil {
 					w.Abort()
 					return errors.Wrapf(err,
 						"failed to cache file payload of %q (offset:%d,size:%d)",
 						name, chunkOffset, chunkSize)
 				}
-				if !v.Verified() {
-					w.Abort()
-					return fmt.Errorf("invalid chunk %q (offset:%d,size:%d)",
-						name, chunkOffset, chunkSize)
+				if v != nil {
+					// verification is required
+					if !v.Verified() {
+						w.Abort()
+						return fmt.Errorf("invalid chunk %q (offset:%d,size:%d)", name, chunkOffset, chunkSize)
+					}
 				}
 
 				return w.Commit()
@@ -326,11 +347,9 @@ func (gr *reader) cacheWithReader(ctx context.Context, currentDepth int, eg *err
 }
 
 type file struct {
-	id    uint32
-	ra    io.ReaderAt
-	r     *metadata.Reader
-	cache cache.BlobCache
-	gr    *reader
+	id uint32
+	fr *metadata.FileReader
+	gr *reader
 }
 
 // ReadAt reads chunks from the stargz file with trying to fetch as many chunks
@@ -338,7 +357,7 @@ type file struct {
 func (sf *file) ReadAt(p []byte, offset int64) (int, error) {
 	nr := 0
 	for nr < len(p) {
-		chunkOffset, chunkSize, ok := sf.r.ChunkEntryForOffset(sf.id, offset+int64(nr))
+		chunkOffset, chunkSize, chunkDigestStr, ok := sf.fr.ChunkEntryForOffset(offset + int64(nr))
 		if !ok {
 			break
 		}
@@ -350,7 +369,7 @@ func (sf *file) ReadAt(p []byte, offset int64) (int, error) {
 		)
 
 		// Check if the content exists in the cache
-		if r, err := sf.cache.Get(id); err == nil {
+		if r, err := sf.gr.cache.Get(id); err == nil {
 			n, err := r.ReadAt(p[nr:int64(nr)+expectedSize], lowerDiscard)
 			if (err == nil || err == io.EOF) && int64(n) == expectedSize {
 				nr += n
@@ -366,18 +385,18 @@ func (sf *file) ReadAt(p []byte, offset int64) (int, error) {
 		if lowerDiscard == 0 && upperDiscard == 0 {
 			// We can directly store the result to the given buffer
 			ip := p[nr : int64(nr)+chunkSize]
-			n, err := sf.ra.ReadAt(ip, chunkOffset)
+			n, err := sf.fr.ReadAt(ip, chunkOffset)
 			if err != nil && err != io.EOF {
 				return 0, errors.Wrap(err, "failed to read data")
 			}
 
 			// Verify this chunk
-			if err := sf.verify(ip, sf.id, chunkOffset, chunkSize); err != nil {
-				return 0, errors.Wrap(err, "invalid chunk")
+			if err := sf.verify(ip, chunkDigestStr); err != nil {
+				return 0, errors.Wrapf(err, "invalid chunk")
 			}
 
 			// Cache this chunk
-			if w, err := sf.cache.Add(id); err == nil {
+			if w, err := sf.gr.cache.Add(id); err == nil {
 				if cn, err := w.Write(ip); err != nil || cn != len(ip) {
 					w.Abort()
 				} else {
@@ -394,19 +413,18 @@ func (sf *file) ReadAt(p []byte, offset int64) (int, error) {
 		b.Reset()
 		b.Grow(int(chunkSize))
 		ip := b.Bytes()[:chunkSize]
-		if _, err := sf.ra.ReadAt(ip, chunkOffset); err != nil && err != io.EOF {
+		if _, err := sf.fr.ReadAt(ip, chunkOffset); err != nil && err != io.EOF {
 			sf.gr.bufPool.Put(b)
 			return 0, errors.Wrap(err, "failed to read data")
 		}
 
 		// Verify this chunk
-		if err := sf.verify(ip, sf.id, chunkOffset, chunkSize); err != nil {
-			sf.gr.bufPool.Put(b)
-			return 0, errors.Wrap(err, "invalid chunk")
+		if err := sf.verify(ip, chunkDigestStr); err != nil {
+			return 0, errors.Wrapf(err, "invalid chunk")
 		}
 
 		// Cache this chunk
-		if w, err := sf.cache.Add(id); err == nil {
+		if w, err := sf.gr.cache.Add(id); err == nil {
 			if cn, err := w.Write(ip); err != nil || cn != len(ip) {
 				w.Abort()
 			} else {
@@ -425,18 +443,21 @@ func (sf *file) ReadAt(p []byte, offset int64) (int, error) {
 	return nr, nil
 }
 
-func (sf *file) verify(p []byte, id uint32, chunkOffset, chunkSize int64) error {
-	v, err := sf.gr.verifier.Verifier(id, chunkOffset, chunkSize)
+func (sf *file) verify(p []byte, chunkDigestStr string) error {
+	v, err := sf.gr.verifier(chunkDigestStr)
 	if err != nil {
-		return errors.Wrapf(err, "verifier not found %d (offset:%d,size:%d)", id, chunkOffset, chunkSize)
+		return errors.Wrapf(err, "invalid chunk")
+	}
+	if v == nil {
+		// Verification is not required.
+		return nil
 	}
 	if _, err := v.Write(p); err != nil {
-		return errors.Wrapf(err, "failed to verify %d (offset:%d,size:%d)", id, chunkOffset, chunkSize)
+		return errors.Wrap(err, "invalid chunk: failed to write to verifier")
 	}
 	if !v.Verified() {
-		return fmt.Errorf("invalid chunk %d (offset:%d,size:%d)", id, chunkOffset, chunkSize)
+		return errors.Wrap(err, "invalid chunk: not verified")
 	}
-
 	return nil
 }
 

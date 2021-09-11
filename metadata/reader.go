@@ -132,6 +132,10 @@ func (r *Reader) RootID() uint32 {
 	return r.rootID
 }
 
+func (r *Reader) TOCDigest() digest.Digest {
+	return r.tocDigest
+}
+
 // Clone returns a new reader identical to the current reader
 // but uses the provided section reader for retrieving file paylaods.
 func (r *Reader) Clone(sr *io.SectionReader) *Reader {
@@ -618,64 +622,8 @@ func (r *Reader) ForeachChild(id uint32, f func(name string, id uint32, mode os.
 	return nil
 }
 
-// ChunkEntryForOffset returns a chunk entry where the specified
-// offset belongs to.
-func (r *Reader) ChunkEntryForOffset(id uint32, offset int64) (off int64, size int64, ok bool) {
-	ci, ok := r.chunkEntryForOffset(id, offset)
-	if !ok {
-		return 0, 0, false
-	}
-	return ci.chunkOffset, ci.chunkSize, true
-}
-
-func (r *Reader) chunkEntryForOffset(id uint32, offset int64) (ci chunkEntry, ok bool) {
-	var chunks []chunkEntry
-	if err := r.view(func(tx *bolt.Tx) error {
-		nodes, err := getNodes(tx, r.fsID)
-		if err != nil {
-			return errors.Wrapf(err, "nodes bucket of %q not found for getting chunk info of %d", r.fsID, id)
-		}
-		b, err := getNodeBucketByID(nodes, id)
-		if err != nil {
-			return errors.Wrapf(err, "failed to get chunk bucket %d", id)
-		}
-		m, _ := binary.Uvarint(b.Get(bucketKeyMode))
-		if !os.FileMode(uint32(m)).IsRegular() {
-			return fmt.Errorf("%q is not a regular file", id)
-		}
-
-		metadataEntries, err := getMetadata(tx, r.fsID)
-		if err != nil {
-			return errors.Wrapf(err, "metadata bucket of %q not found for searching chunk offset of %d", r.fsID, id)
-		}
-		md, err := getMetadataBucketByID(metadataEntries, id)
-		if err != nil {
-			return errors.Wrapf(err, "failed to get chunk metadata %d", id)
-		}
-		size, _ := binary.Varint(b.Get(bucketKeySize))
-		chunks, err = readChunks(md, size)
-		if err != nil {
-			return errors.Wrapf(err, "failed to get chunks")
-		}
-		return nil
-	}); err != nil {
-		return chunkEntry{}, false
-	}
-	if len(chunks) == 0 {
-		return chunkEntry{}, false
-	}
-	i := sort.Search(len(chunks), func(i int) bool {
-		e := chunks[i]
-		return e.chunkOffset >= offset || (offset > e.chunkOffset && offset < e.chunkOffset+e.chunkSize)
-	})
-	if i == len(chunks) {
-		return chunkEntry{}, false
-	}
-	return chunks[i], true
-}
-
 // OpenFile returns a section reader of the specified node.
-func (r *Reader) OpenFile(id uint32) (*io.SectionReader, error) {
+func (r *Reader) OpenFile(id uint32) (*FileReader, error) {
 	var chunks []chunkEntry
 	var size int64
 
@@ -689,12 +637,11 @@ func (r *Reader) OpenFile(id uint32) (*io.SectionReader, error) {
 		if err != nil {
 			return errors.Wrapf(err, "failed to get file bucket %d", id)
 		}
-		size, _ = binary.Varint(b.Get(bucketKeySize))
 		m, _ := binary.Uvarint(b.Get(bucketKeyMode))
+		size, _ = binary.Varint(b.Get(bucketKeySize))
 		if !os.FileMode(uint32(m)).IsRegular() {
 			return fmt.Errorf("%q is not a regular file", id)
 		}
-
 		metadataEntries, err := getMetadata(tx, r.fsID)
 		if err != nil {
 			return errors.Wrapf(err, "metadata bucket of %q not found for opening %d", r.fsID, id)
@@ -710,24 +657,39 @@ func (r *Reader) OpenFile(id uint32) (*io.SectionReader, error) {
 	}); err != nil {
 		return nil, err
 	}
-	fr := &fileReader{
+	return &FileReader{
 		r:          r,
 		size:       size,
 		ents:       chunks,
 		nextOffset: nextOffset,
-	}
-	return io.NewSectionReader(fr, 0, fr.size), nil
+	}, nil
 }
 
-type fileReader struct {
+type FileReader struct {
 	r          *Reader
 	size       int64
 	ents       []chunkEntry
 	nextOffset int64
 }
 
+func (fr *FileReader) ChunkEntryForOffset(offset int64) (off int64, size int64, dgst string, ok bool) {
+	i := sort.Search(len(fr.ents), func(i int) bool {
+		e := fr.ents[i]
+		return e.chunkOffset >= offset || (offset > e.chunkOffset && offset < e.chunkOffset+e.chunkSize)
+	})
+	if i == len(fr.ents) {
+		return 0, 0, "", false
+	}
+	ci := fr.ents[i]
+	return ci.chunkOffset, ci.chunkSize, ci.chunkDigest, true
+}
+
+func (fr *FileReader) Size() int64 {
+	return fr.size
+}
+
 // ReadAt reads file payload of this file.
-func (fr *fileReader) ReadAt(p []byte, off int64) (n int, err error) {
+func (fr *FileReader) ReadAt(p []byte, off int64) (n int, err error) {
 	if off >= fr.size {
 		return 0, io.EOF
 	}
@@ -775,42 +737,6 @@ func (fr *fileReader) ReadAt(p []byte, off int64) (n int, err error) {
 		return 0, fmt.Errorf("discard of %d bytes = %v, %v", base, n, err)
 	}
 	return io.ReadFull(gz, p)
-}
-
-// VerifyTOC checks if the eStargz TOC has the specified digest. If so,
-// this returns ChunkVerifier which can be used for checking digest of
-// each file chunk.
-func (r *Reader) VerifyTOC(tocDigest digest.Digest) (ChunkVerifier, error) {
-	if r.tocDigest != tocDigest {
-		return nil, fmt.Errorf("invalid TOC JSON %q; want %q", r.tocDigest, tocDigest)
-	}
-	return &verifier{r}, nil
-}
-
-// ChunkVerifier provides digest.Verifier for chunk payloads.
-type ChunkVerifier interface {
-	Verifier(id uint32, chunkOffset, chunkSize int64) (digest.Verifier, error)
-}
-
-type verifier struct {
-	r *Reader
-}
-
-// Verifier returns digest.Verifier for the specified file chunk.
-func (v *verifier) Verifier(id uint32, chunkOffset, chunkSize int64) (digest.Verifier, error) {
-	ci, ok := v.r.chunkEntryForOffset(id, chunkOffset)
-	if !ok {
-		return nil, fmt.Errorf("chunk entry not found for the specified range")
-	}
-	if ci.chunkSize != chunkSize {
-		return nil, fmt.Errorf("invalid chunk size: %d; want %d", chunkSize, ci.chunkSize)
-	}
-	d, err := digest.Parse(ci.chunkDigest)
-	if err != nil {
-		// TODO: detect this eariler (i.e. in VerifyTOC)
-		return nil, errors.Wrapf(err, "failed to parse digest %q", ci.chunkDigest)
-	}
-	return d.Verifier(), nil
 }
 
 func attrFromTOCEntry(src *estargz.TOCEntry, dst *Attr) *Attr {

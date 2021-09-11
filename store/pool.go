@@ -136,7 +136,7 @@ func (p *Pool) uniqueID() (id uint32, _ error) {
 	p.idMapMu.Lock()
 	defer p.idMapMu.Unlock()
 	for i := 0; i < 10000; i++ {
-		id = rand.New(rand.NewSource(time.Now().UnixNano())).Uint32()
+		id = rand.Uint32()
 		if _, ok := p.idMap[id]; !ok {
 			p.idMap[id] = struct{}{}
 			return

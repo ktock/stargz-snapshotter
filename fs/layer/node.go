@@ -60,13 +60,15 @@ const (
 var opaqueXattrs = []string{"trusted.overlay.opaque", "user.overlay.opaque"}
 
 func newNode(layerDgst digest.Digest, r reader.Reader, blob remote.Blob, baseInode uint32) (fusefs.InodeEmbedder, error) {
+	rootID := r.Metadata().RootID()
 	return &node{
-		id: r.Metadata().RootID(),
+		id: rootID,
 		fs: &fs{
 			r:           r,
 			s:           newState(layerDgst, blob),
 			layerDigest: layerDgst,
 			baseInode:   baseInode,
+			rootID:      rootID,
 		},
 	}, nil
 }
@@ -75,6 +77,7 @@ func newNode(layerDgst digest.Digest, r reader.Reader, blob remote.Blob, baseIno
 type fs struct {
 	r           reader.Reader
 	s           *state
+	rootID      uint32
 	layerDigest digest.Digest
 	baseInode   uint32
 }
@@ -86,8 +89,15 @@ func (fs *fs) inodeOfID(id uint32) uint64 {
 // node is a filesystem inode abstraction.
 type node struct {
 	fusefs.Inode
-	fs *fs
-	id uint32
+	fs   *fs
+	id   uint32
+	attr metadata.Attr
+	ents []fuse.DirEntry
+	entsCached bool
+}
+
+func (n *node) isRootNode() bool {
+	return n.id == n.fs.rootID
 }
 
 func (n *node) isOpaque() bool {
@@ -97,18 +107,26 @@ func (n *node) isOpaque() bool {
 	return false
 }
 
-func (n *node) isRootNode() bool {
-	return n.id == n.fs.r.Metadata().RootID()
-}
-
 var _ = (fusefs.InodeEmbedder)((*node)(nil))
 
 var _ = (fusefs.NodeReaddirer)((*node)(nil))
 
 func (n *node) Readdir(ctx context.Context) (fusefs.DirStream, syscall.Errno) {
+	ents, errno := n.readdir()
+	if errno != 0 {
+		return nil, errno
+	}
+	return fusefs.NewListDirStream(ents), 0
+}
+
+func (n *node) readdir() ([]fuse.DirEntry, syscall.Errno) {
 	// Measure how long node_readdir operation takes.
 	start := time.Now() // set start time
 	defer commonmetrics.MeasureLatency(commonmetrics.NodeReaddir, n.fs.layerDigest, start)
+
+	if n.entsCached {
+		return n.ents, 0
+	}
 
 	isRoot := n.isRootNode()
 
@@ -137,7 +155,7 @@ func (n *node) Readdir(ctx context.Context) (fusefs.DirStream, syscall.Errno) {
 		ents = append(ents, fuse.DirEntry{
 			Mode: fileModeToSystemMode(mode),
 			Name: name,
-			Ino:  0,
+			Ino:  n.fs.inodeOfID(id),
 		})
 		return true
 
@@ -162,14 +180,14 @@ func (n *node) Readdir(ctx context.Context) (fusefs.DirStream, syscall.Errno) {
 	sort.Slice(ents, func(i, j int) bool {
 		return ents[i].Name < ents[j].Name
 	})
+	n.ents, n.entsCached = ents, true // cache it
 
-	return fusefs.NewListDirStream(ents), 0
+	return ents, 0
 }
 
 var _ = (fusefs.NodeLookuper)((*node)(nil))
 
 func (n *node) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fusefs.Inode, syscall.Errno) {
-
 	isRoot := n.isRootNode()
 
 	// We don't want to show prefetch landmarks in "/".
@@ -187,31 +205,51 @@ func (n *node) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fu
 		return n.NewInode(ctx, n.fs.s, stateToAttr(n.fs.s, &out.Attr)), 0
 	}
 
-	// lookup stargz TOCEntry
-	id, ce, err := n.fs.r.Metadata().GetChild(n.id, name)
-	if err != nil {
-		// If the entry exists as a whiteout, show an overlayfs-styled whiteout node.
-		whName := fmt.Sprintf("%s%s", whiteoutPrefix, name)
-		if whID, wh, err := n.fs.r.Metadata().GetChild(n.id, whName); err == nil {
-			if cn := n.GetChild(whName); cn != nil {
-				entryToAttr(n.fs.inodeOfID(whID), wh, &out.Attr)
-				return cn, 0
-			}
-			return n.NewInode(ctx, &whiteout{
-				id: whID,
-				fs: n.fs,
-			}, entryToWhAttr(n.fs.inodeOfID(whID), wh, &out.Attr)), 0
-		}
-		return nil, syscall.ENOENT
-	}
+	// lookup on memory nodes
 	if cn := n.GetChild(name); cn != nil {
-		entryToAttr(n.fs.inodeOfID(id), ce, &out.Attr)
+		switch tn := cn.Operations().(type) {
+		case *node:
+			entryToAttr(n.fs.inodeOfID(tn.id), tn.attr, &out.Attr)
+		case *whiteout:
+			entryToAttr(n.fs.inodeOfID(tn.id), tn.attr, &out.Attr)
+		default:
+			n.fs.s.report(fmt.Errorf("node.Lookup: uknown node type detected"))
+			return nil, syscall.EIO
+		}
 		return cn, 0
 	}
 
+	// early return if this entry doesn't exist
+	if n.entsCached {
+		var found bool
+		for _, e := range n.ents {
+			if e.Name == name {
+				found = true
+			}
+		}
+		if !found {
+			return nil, syscall.ENOENT
+		}
+	}
+
+	id, ce, err := n.fs.r.Metadata().GetChild(n.id, name)
+	if err != nil {
+		// If the entry exists as a whiteout, show an overlayfs-styled whiteout node.
+		if whID, wh, err := n.fs.r.Metadata().GetChild(n.id, fmt.Sprintf("%s%s", whiteoutPrefix, name)); err == nil {
+			return n.NewInode(ctx, &whiteout{
+				id:   whID,
+				fs:   n.fs,
+				attr: wh,
+			}, entryToWhAttr(n.fs.inodeOfID(whID), wh, &out.Attr)), 0
+		}
+		n.readdir() // This code path is very expensive. Cache child entries here so that the next call don't reach here.
+		return nil, syscall.ENOENT
+	}
+
 	return n.NewInode(ctx, &node{
-		id: id,
-		fs: n.fs,
+		id:   id,
+		fs:   n.fs,
+		attr: ce,
 	}, entryToAttr(n.fs.inodeOfID(id), ce, &out.Attr)), 0
 }
 
@@ -226,29 +264,20 @@ func (n *node) Open(ctx context.Context, flags uint32) (fh fusefs.FileHandle, fu
 	return &file{
 		n:  n,
 		ra: ra,
-	}, 0, 0
+	}, fuse.FOPEN_KEEP_CACHE, 0
 }
 
 var _ = (fusefs.NodeGetattrer)((*node)(nil))
 
 func (n *node) Getattr(ctx context.Context, f fusefs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	ent, err := n.fs.r.Metadata().GetAttr(n.id)
-	if err != nil {
-		n.fs.s.report(fmt.Errorf("node.Getattr: %v", err))
-		return syscall.EIO
-	}
-	entryToAttr(n.fs.inodeOfID(n.id), ent, &out.Attr)
+	entryToAttr(n.fs.inodeOfID(n.id), n.attr, &out.Attr)
 	return 0
 }
 
 var _ = (fusefs.NodeGetxattrer)((*node)(nil))
 
 func (n *node) Getxattr(ctx context.Context, attr string, dest []byte) (uint32, syscall.Errno) {
-	ent, err := n.fs.r.Metadata().GetAttr(n.id)
-	if err != nil {
-		n.fs.s.report(fmt.Errorf("node.Getxattr: %v", err))
-		return 0, syscall.EIO
-	}
+	ent := n.attr
 	opq := n.isOpaque()
 	for _, opaqueXattr := range opaqueXattrs {
 		if attr == opaqueXattr && opq {
@@ -271,15 +300,10 @@ func (n *node) Getxattr(ctx context.Context, attr string, dest []byte) (uint32, 
 var _ = (fusefs.NodeListxattrer)((*node)(nil))
 
 func (n *node) Listxattr(ctx context.Context, dest []byte) (uint32, syscall.Errno) {
-	ent, err := n.fs.r.Metadata().GetAttr(n.id)
-	if err != nil {
-		n.fs.s.report(fmt.Errorf("node.Listxattr: %v", err))
-		return 0, syscall.EIO
-	}
+	ent := n.attr
 	opq := n.isOpaque()
 	var attrs []byte
 	if opq {
-		// This node is an opaque directory so add overlayfs-compliant indicator.
 		for _, opaqueXattr := range opaqueXattrs {
 			attrs = append(attrs, []byte(opaqueXattr+"\x00")...)
 		}
@@ -296,11 +320,7 @@ func (n *node) Listxattr(ctx context.Context, dest []byte) (uint32, syscall.Errn
 var _ = (fusefs.NodeReadlinker)((*node)(nil))
 
 func (n *node) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
-	ent, err := n.fs.r.Metadata().GetAttr(n.id)
-	if err != nil {
-		n.fs.s.report(fmt.Errorf("node.Readlink: %v", err))
-		return nil, syscall.EIO
-	}
+	ent := n.attr
 	return []byte(ent.LinkName), 0
 }
 
@@ -331,30 +351,22 @@ func (f *file) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResul
 var _ = (fusefs.FileGetattrer)((*file)(nil))
 
 func (f *file) Getattr(ctx context.Context, out *fuse.AttrOut) syscall.Errno {
-	ent, err := f.n.fs.r.Metadata().GetAttr(f.n.id)
-	if err != nil {
-		f.n.fs.s.report(fmt.Errorf("file.Getattr: %v", err))
-		return syscall.EIO
-	}
-	entryToAttr(f.n.fs.inodeOfID(f.n.id), ent, &out.Attr)
+	entryToAttr(f.n.fs.inodeOfID(f.n.id), f.n.attr, &out.Attr)
 	return 0
 }
 
 // whiteout is a whiteout abstraction compliant to overlayfs.
 type whiteout struct {
 	fusefs.Inode
-	id uint32
-	fs *fs
+	id   uint32
+	fs   *fs
+	attr metadata.Attr
 }
 
 var _ = (fusefs.NodeGetattrer)((*whiteout)(nil))
 
 func (w *whiteout) Getattr(ctx context.Context, f fusefs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	ent, err := w.fs.r.Metadata().GetAttr(w.id)
-	if err != nil {
-		w.fs.s.report(fmt.Errorf("whiteout.Getattr: %v", err))
-		return syscall.EIO
-	}
+	ent := w.attr
 	entryToWhAttr(w.fs.inodeOfID(w.id), ent, &out.Attr)
 	return 0
 }
