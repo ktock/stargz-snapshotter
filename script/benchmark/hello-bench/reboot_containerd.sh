@@ -62,7 +62,13 @@ function cleanup {
         find "${REMOTE_SNAPSHOTTER_ROOT}snapshotter/snapshots/" \
              -maxdepth 1 -mindepth 1 -type d -exec umount "{}/fs" \;
     fi
+    if [ -d "${REMOTE_SNAPSHOTTER_ROOT}stargz/" ] ; then 
+        rm -rf "${REMOTE_SNAPSHOTTER_ROOT}stargz/"* || true
+        umount "${REMOTE_SNAPSHOTTER_ROOT}stargz/" || true
+    fi
     rm -rf "${REMOTE_SNAPSHOTTER_ROOT}"*
+    mkdir -p "${REMOTE_SNAPSHOTTER_ROOT}stargz/"
+    mount -t tmpfs tmpfs "${REMOTE_SNAPSHOTTER_ROOT}stargz/"
 }
 
 echo "cleaning up the environment..."
