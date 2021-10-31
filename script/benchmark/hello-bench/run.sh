@@ -48,6 +48,9 @@ if [ "${BENCHMARK_RUNTIME_MODE}" == "containerd" ] ; then
     REBOOT_SCRIPT="${REPO}/script/benchmark/hello-bench/reboot_containerd.sh"
 elif [ "${BENCHMARK_RUNTIME_MODE}" == "podman" ] ; then
     REBOOT_SCRIPT="${REPO}/script/benchmark/hello-bench/reboot_store.sh"
+elif [ "${BENCHMARK_RUNTIME_MODE}" == "ipfs-containerd" ] ; then
+    export ENABLE_IPFS="true"
+    REBOOT_SCRIPT="${REPO}/script/benchmark/hello-bench/reboot_containerd.sh"
 else
     echo "Unknown runtime: ${BENCHMARK_RUNTIME_MODE}"
     exit 1

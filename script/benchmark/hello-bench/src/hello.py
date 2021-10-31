@@ -169,6 +169,8 @@ class BenchRunner:
             self.controller = ContainerdController(mode == ESTARGZ_NOOPT_MODE or mode == ESTARGZ_MODE or mode == ZSTDCHUNKED_MODE)
         elif runtime == "podman":
             self.controller = PodmanController()
+        elif runtime == "ipfs-containerd":
+            self.controller = IPFSContainerdController(mode == ESTARGZ_NOOPT_MODE or mode == ESTARGZ_MODE or mode == ZSTDCHUNKED_MODE)
         else:
             print 'Unknown runtime mode: '+runtime
             exit(1)
@@ -559,6 +561,41 @@ class PodmanController:
         print cmd
         rc = os.system(cmd)
         assert(rc == 0)
+
+class IPFSContainerdController(ContainerdController, object):
+    def __init__(self, is_lazypull=False):
+        super(IPFSContainerdController, self).__init__(is_lazypull)
+        ref2cid = {}
+        # TODO: make it configurable
+        with open('/ipfsmapfile', 'r') as f:
+            for line in f:
+                parts = line.split()
+                assert(len(parts) == 2)
+                ref2cid[parts[0]] = parts[1]
+        self.ref2cid = ref2cid
+
+    def pull_cmd(self, image):
+        snapshotter_opt = "--snapshotter=overlayfs"
+        if self.is_lazypull:
+            snapshotter_opt = "--snapshotter=stargz"
+        cmd = '%s i rpull --ipfs %s %s' % (CTR, snapshotter_opt, self.ref2cid[image])
+        print cmd
+        return cmd
+
+    def create_echo_hello_cmd(self, image, cid):
+        return super(IPFSContainerdController, self).create_echo_hello_cmd(self.ref2cid[image], cid)
+
+    def create_cmd_arg_cmd(self, image, cid, runargs):
+        return super(IPFSContainerdController, self).create_cmd_arg_cmd(self.ref2cid[image], cid, runargs)
+
+    def create_cmd_arg_wait_cmd(self, image, cid, runargs):
+        return super(IPFSContainerdController, self).create_cmd_arg_wait_cmd(self.ref2cid[image], cid, runargs)
+
+    def create_cmd_stdin_cmd(self, image, cid, runargs):
+        return super(IPFSContainerdController, self).create_cmd_stdin_cmd(self.ref2cid[image], cid, runargs)
+
+    def cleanup(self, name, image):
+        return super(IPFSContainerdController, self).cleanup(name, self.ref2cid[image])
 
 def main():
     if len(sys.argv) == 1:

@@ -35,6 +35,9 @@ BENCHMARKING_CONTAINER=hello-bench-container
 BENCHMARK_USER=${BENCHMARK_USER:-stargz-containers}
 export BENCHMARK_RUNTIME_MODE=${BENCHMARK_RUNTIME_MODE:-containerd}
 
+BENCHMARK_IPFS_INFO_DIR_USE=$(mktemp -d)
+BENCHMARK_IPFS_REF_TO_CID_USE=$(mktemp -d)
+BENCHMARK_IPFS_BOOTSTRAP_IP_USE=
 BENCHMARKING_TARGET_BASE_IMAGE=
 BENCHMARKING_TARGET_CONFIG_DIR=
 if [ "${BENCHMARK_RUNTIME_MODE}" == "containerd" ] ; then
@@ -43,6 +46,12 @@ if [ "${BENCHMARK_RUNTIME_MODE}" == "containerd" ] ; then
 elif [ "${BENCHMARK_RUNTIME_MODE}" == "podman" ] ; then
     BENCHMARKING_TARGET_BASE_IMAGE=podman-base
     BENCHMARKING_TARGET_CONFIG_DIR="${CONTEXT}/config-podman"
+elif [ "${BENCHMARK_RUNTIME_MODE}" == "ipfs-containerd" ] ; then
+    BENCHMARKING_TARGET_BASE_IMAGE=snapshotter-base
+    BENCHMARKING_TARGET_CONFIG_DIR="${CONTEXT}/config-containerd"
+    BENCHMARK_IPFS_INFO_DIR_USE="${BENCHMARK_IPFS_INFO_DIR}"
+    BENCHMARK_IPFS_REF_TO_CID_USE="${BENCHMARK_IPFS_REF_TO_CID}"
+    BENCHMARK_IPFS_BOOTSTRAP_IP_USE="${BENCHMARK_IPFS_BOOTSTRAP_IP}"
 else
     echo "Unknown runtime: ${BENCHMARK_RUNTIME_MODE}"
     exit 1
@@ -66,6 +75,8 @@ trap 'cleanup "$?"' EXIT SIGHUP SIGINT SIGQUIT SIGTERM
 
 cp -R "${BENCHMARKING_TARGET_CONFIG_DIR}" "${TMP_CONTEXT}/config"
 
+IPFS_VERSION=v0.10.0
+
 cat <<EOF > "${TMP_CONTEXT}/Dockerfile"
 FROM ${BENCHMARKING_BASE_IMAGE_NAME}
 
@@ -75,7 +86,11 @@ RUN apt-get update -y && \
               \${GOPATH}/src/github.com/google/go-containerregistry && \
     cd \${GOPATH}/src/github.com/google/go-containerregistry && \
     git checkout 4b1985e5ea2104672636879e1694808f735fd214 && \
-    GO111MODULE=on go get github.com/google/go-containerregistry/cmd/crane
+    GO111MODULE=on go get github.com/google/go-containerregistry/cmd/crane && \
+    wget https://dist.ipfs.io/go-ipfs/${IPFS_VERSION}/go-ipfs_${IPFS_VERSION}_linux-amd64.tar.gz && \
+    tar -xvzf go-ipfs_${IPFS_VERSION}_linux-amd64.tar.gz && \
+    cd go-ipfs && \
+    bash install.sh
 
 COPY ./config /
 
@@ -110,12 +125,16 @@ services:
     - "containerd-stargz-grpc-data:/var/lib/containerd-stargz-grpc:delegated"
     - "containers-data:/var/lib/containers:delegated"
     - "additional-store-data:/var/lib/stargz-store:delegated"
+    - "${BENCHMARK_IPFS_INFO_DIR_USE}:/ipfsinfo"
+    - "${BENCHMARK_IPFS_REF_TO_CID_USE}:/ipfsmapfile"
 volumes:
   containerd-data:
   containerd-stargz-grpc-data:
   containers-data:
   additional-store-data:
 EOF
+echo "${DOCKER_COMPOSE_YAML}"
+cat "${DOCKER_COMPOSE_YAML}"
 
 echo "Preparing for benchmark..."
 OUTPUTDIR="${BENCHMARK_RESULT_DIR:-}"
@@ -138,7 +157,7 @@ if ! ( cd "${CONTEXT}" && \
                           "${BENCHMARKING_NODE}" && \
            docker-compose -f "${DOCKER_COMPOSE_YAML}" up -d --force-recreate && \
            docker exec \
-		  -e BENCHMARK_RUNTIME_MODE -e BENCHMARK_SAMPLES_NUM -e BENCHMARK_PROFILE \
+		  -e BENCHMARK_RUNTIME_MODE -e BENCHMARK_SAMPLES_NUM -e BENCHMARK_PROFILE -e BENCHMARK_IPFS_BOOTSTRAP_IP=${BENCHMARK_IPFS_BOOTSTRAP_IP_USE} \
                   -i "${BENCHMARKING_CONTAINER}" \
                   script/benchmark/hello-bench/run.sh \
                   "${BENCHMARK_REGISTRY:-ghcr.io}/${BENCHMARK_USER}" \

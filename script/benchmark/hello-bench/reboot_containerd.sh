@@ -62,13 +62,29 @@ function cleanup {
         find "${REMOTE_SNAPSHOTTER_ROOT}snapshotter/snapshots/" \
              -maxdepth 1 -mindepth 1 -type d -exec umount "{}/fs" \;
     fi
+    if [ "${ENABLE_IPFS:-}" == "true" ] ; then
+        # TODO: use ${IPFS_PATH}
+        rm -rf ~/.ipfs
+    fi
     rm -rf "${REMOTE_SNAPSHOTTER_ROOT}"*
 }
 
 echo "cleaning up the environment..."
 kill_all "containerd"
 kill_all "containerd-stargz-grpc"
+if [ "${ENABLE_IPFS:-}" == "true" ] ; then
+    kill_all "ipfs daemon"
+fi
 cleanup
+
+if [ "${ENABLE_IPFS:-}" == "true" ] ; then
+    ipfs init
+    cp /ipfsinfo/swarm.key ~/.ipfs/swarm.key
+    ipfs bootstrap rm --all
+    ipfs bootstrap add /ip4/"${BENCHMARK_IPFS_BOOTSTRAP_IP}"/tcp/4001/ipfs/"$(cat /ipfsinfo/peerid)"
+    ipfs daemon &
+    sleep 10
+fi
 
 if [ "${DISABLE_PREFETCH:-}" == "true" ] ; then
     sed -i 's/noprefetch = .*/noprefetch = true/g' "${REMOTE_SNAPSHOTTER_CONFIG_DIR}config.toml"
