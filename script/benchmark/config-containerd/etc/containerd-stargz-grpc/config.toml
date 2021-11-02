@@ -1,3 +1,5 @@
 # the value of noprefetch will be replaced during benchmarking
 noprefetch = true
 debug_address = "/run/containerd-stargz-grpc/debug.sock"
+[blob]
+ipfs = false

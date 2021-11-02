@@ -84,6 +84,9 @@ if [ "${ENABLE_IPFS:-}" == "true" ] ; then
     ipfs bootstrap add /ip4/"${BENCHMARK_IPFS_BOOTSTRAP_IP}"/tcp/4001/ipfs/"$(cat /ipfsinfo/peerid)"
     ipfs daemon &
     sleep 10
+    sed -i 's/ipfs = .*/ipfs = true/g' "${REMOTE_SNAPSHOTTER_CONFIG_DIR}config.toml"
+else
+    sed -i 's/ipfs = .*/ipfs = false/g' "${REMOTE_SNAPSHOTTER_CONFIG_DIR}config.toml"
 fi
 
 if [ "${DISABLE_PREFETCH:-}" == "true" ] ; then

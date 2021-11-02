@@ -108,6 +108,8 @@ services:
     image: ${BENCHMARKING_NODE_IMAGE_NAME}
     container_name: ${BENCHMARKING_CONTAINER}
     privileged: true
+    ports:
+    - "4001:4001"
     init: true
     working_dir: /go/src/github.com/containerd/stargz-snapshotter
     environment:
