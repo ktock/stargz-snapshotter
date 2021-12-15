@@ -12,10 +12,10 @@
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
 
-ARG CONTAINERD_VERSION=v1.6.0-beta.2
+ARG CONTAINERD_VERSION=v1.6.0-beta.3
 ARG RUNC_VERSION=v1.0.3
 ARG CNI_PLUGINS_VERSION=v1.0.1
-ARG NERDCTL_VERSION=0.14.0
+ARG NERDCTL_VERSION=bb682bc46b00d41dcd26479260becfc4db7168b9
 
 ARG PODMAN_VERSION=v3.4.2
 ARG CRIO_VERSION=8d4df4ea25cd6446f91ee9944ac92c1c726cf475
@@ -205,6 +205,18 @@ COPY --from=snapshotter-dev /out/ctr-remote /usr/local/bin/
 COPY ./script/config/ /
 RUN /clone3-workaround apt-get update -y && /clone3-workaround apt-get install --no-install-recommends -y fuse
 ENTRYPOINT [ "/usr/local/bin/entrypoint", "/sbin/init" ]
+
+FROM golang-base AS nerdctl-dev
+ARG NERDCTL_VERSION
+RUN git clone https://github.com/ktock/nerdctl $GOPATH/src/github.com/containerd/nerdctl && \
+    cd $GOPATH/src/github.com/containerd/nerdctl && \
+    git checkout ${NERDCTL_VERSION} && \
+    make nerdctl && make install BINDIR=/out/
+
+FROM ubuntu:20.04 AS nerdctl
+RUN apt-get update -y && apt-get install -y curl
+COPY --from=nerdctl-dev /out/nerdctl /usr/local/bin/
+ENTRYPOINT [ "/usr/local/bin/nerdctl", "ipfs", "registry", "serve" ]
 
 # Image for testing CRI-O with Stargz Store.
 # NOTE: This cannot be used for the node image of KinD.

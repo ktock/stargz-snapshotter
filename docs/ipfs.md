@@ -136,6 +136,80 @@ user	0m0.556s
 sys	0m0.280s
 ```
 
+## IPFS-based image sharing on Kubernetes
+
+You can perform IPFS-based image sharing on Kubernetes using [nerdctl](https://github.com/containerd/nerdctl).
+
+`nerdctl` provides an IPFS-based registry API through [`nerdctl ipfs registry` command](https://github.com/containerd/nerdctl/blob/v0.15.0/README.md#ipfs-management).
+This allows nodes on Kubernetes to share images on IPFS.
+
+[This directory in our repo](/script/nerdctl-ipfs-registry-kubernetes) contains an example manifest to enable IPFS-based image sharing on Kubernetes by deploying nerdctl.
+
+The following tries this feature on kind.
+
+```
+kind create cluster
+```
+
+:information_source: use `kind create cluster --image ghcr.io/stargz-containers/estargz-kind-node:0.10.1` when enabling stargz-snapshotter-based lazy pulling.
+
+Firstly, prepare IDs and keys for bootstraping an IPFS cluster.
+
+```
+./bootstrap.yaml.sh > ./bootstrap.yaml
+```
+
+Then apply bootstrap.yaml and deploy nerdctl to the kubernetes cluster.
+
+```
+kubectl apply -f ./bootstrap.yaml
+kubectl apply -f ./nerdctl-ipfs-registry.yaml
+```
+
+You can add an image to this IPFS network using nerdctl on any node which connects to this IPFS network.
+This image will be share among all nodes in the IPFS network.
+
+Aside from deploying nerdctl on Kubernetes, you need to install nerdctl on the node where you perform this command.
+
+```
+NERDCTL_VERSION=0.15.0
+curl -sSL --output /tmp/nerdctl.tgz https://github.com/containerd/nerdctl/releases/download/v${NERDCTL_VERSION}/nerdctl-${NERDCTL_VERSION}-linux-amd64.tar.gz
+tar zxvf /tmp/nerdctl.tgz -C /usr/local/bin/
+```
+
+The following imports an image to the IPFS cluster via IPFS API (127.0.0.1:9095).
+
+```
+IMPORT_TARGET=ghcr.io/stargz-containers/tomcat:10.0.0-jdk15-openjdk-buster-org
+mkdir -p /tmp/ipfsapi ; echo -n /ip4/127.0.0.1/tcp/9095 >  /tmp/ipfsapi/api
+export IPFS_PATH=/tmp/ipfsapi
+nerdctl pull ${IMPORT_TARGET}
+nerdctl push --estargz ipfs://${IMPORT_TARGET}
+nerdctl rmi ${IMPORT_TARGET}
+```
+
+You can pull this image from IPFS using `localhost:5050/ipfs/<CID>` ref.
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tomcat
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tomcat
+  template:
+    metadata:
+      labels:
+        app: tomcat
+    spec:
+      containers:
+      - name: tomcat
+        image: localhost:5050/ipfs/bafkreic52ntfi4y7x4weq6ewph4wurriwywpxfezpdkkdadfaft7ce6ogq
+```
+
 ## Appendix 1: Creating IPFS private network
 
 You can create a private IPFS network as described in the official docs.

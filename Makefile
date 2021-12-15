@@ -118,3 +118,6 @@ test-k3s:
 
 test-k3s-argo-workflow:
 	@./script/k3s-argo-workflow/run.sh
+
+test-kind-ipfs:
+	@./script/kind-ipfs/test.sh
