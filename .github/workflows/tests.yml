@@ -95,6 +95,22 @@ jobs:
         BUILTIN_SNAPSHOTTER: ${{ matrix.builtin }}
       run: make test-kind
 
+  test-kind-ipfs:
+    runs-on: ubuntu-20.04
+    name: Kind IPFS
+    steps:
+    - uses: actions/checkout@v2
+    - uses: actions/setup-go@v2
+      with:
+        go-version: '1.17.x'
+    - name: Install necessary tools
+      # see https://cluster.ipfs.io/documentation/guides/k8s/
+      run: |
+        go install github.com/whyrusleeping/ipfs-key@latest
+        go install github.com/Kubuxu/go-ipfs-swarm-key-gen/ipfs-swarm-key-gen@latest
+    - name: Run test for pulling image from IPFS on Kubernetes
+      run: make test-kind-ipfs
+
   test-criauth:
     runs-on: ubuntu-20.04
     name: CRIAuth

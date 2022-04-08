@@ -1,1 +1,3 @@
 /out
+/script/nerdctl-ipfs-registry-kubernetes/bootstrap.yaml
+/script/nerdctl-ipfs-registry-kubernetes-cluster/bootstrap.yaml
