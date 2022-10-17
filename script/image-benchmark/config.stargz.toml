@@ -1,0 +1,11 @@
+metrics_address = "127.0.0.1:8234"
+disable_verification = true
+ipfs = true
+metadata_store = "memory"
+[[resolver.host."registry2-bench:5000".mirrors]]
+host = "registry2-bench:5000"
+insecure = true
+[directory_cache]
+direct = true
+[snapshotter]
+allow_invalid_mounts_on_restart = true
