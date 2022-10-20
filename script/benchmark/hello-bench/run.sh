@@ -53,6 +53,11 @@ else
     exit 1
 fi
 
+CHUNKS="0"
+if [ "${BENCHMARK_CHUNKS:-}" != "" ] ; then
+    CHUNKS="${BENCHMARK_CHUNKS}"
+fi
+
 TMP_LOG_FILE=$(mktemp)
 WORKLOADS_LIST=$(mktemp)
 function cleanup {
@@ -102,8 +107,15 @@ for SAMPLE_NO in $(seq ${NUM_OF_SAMPLES}) ; do
     echo -n "" > "${WORKLOADS_LIST}"
     # Randomize workloads
     for IMAGE in ${TARGET_IMAGES} ; do
-        for MODE in ${LEGACY_MODE} ${ESTARGZ_NOOPT_MODE} ${ESTARGZ_MODE} ${ZSTDCHUNKED_MODE} ; do
-            echo "${IMAGE},${MODE}" >> "${WORKLOADS_LIST}"
+        # for MODE in ${LEGACY_MODE} ${ESTARGZ_NOOPT_MODE} ${ESTARGZ_MODE} ${ZSTDCHUNKED_MODE} ; do
+        for MODE in ${LEGACY_MODE} ${ESTARGZ_NOOPT_MODE} ${ESTARGZ_MODE} ; do
+            if [ "${MODE}" == "${ESTARGZ_NOOPT_MODE}" ] || [ "${MODE}" == "${ESTARGZ_MODE}" ]; then
+                for CHUNK in ${CHUNKS} ; do
+                    echo "${IMAGE},${MODE},${CHUNK}" >> "${WORKLOADS_LIST}"
+                done
+            else
+                echo "${IMAGE},${MODE},0" >> "${WORKLOADS_LIST}"
+            fi
         done
     done
     sort -R -o "${WORKLOADS_LIST}" "${WORKLOADS_LIST}"
@@ -116,34 +128,40 @@ for SAMPLE_NO in $(seq ${NUM_OF_SAMPLES}) ; do
 
         IMAGE=$(echo "${THEWL}" | cut -d ',' -f 1)
         MODE=$(echo "${THEWL}" | cut -d ',' -f 2)
+        CHUNK=$(echo "${THEWL}" | cut -d ',' -f 3)
+
+        CHUNKFLAG=""
+        if [ "${CHUNK}" != "0" ] ; then
+            CHUNKFLAG="--chunk=$CHUNK"
+        fi
 
         echo "===== Measuring [${SAMPLE_NO}] ${IMAGE} (${MODE}) ====="
 
         if [ "${MODE}" == "${LEGACY_MODE}" ] ; then
             # disable lazy pulling
             DISABLE_ESTARGZ="true" "${REBOOT_SCRIPT}"
-            measure "--mode=legacy" ${TARGET_REPOSITORY} ${IMAGE} "$additional_flags"
+            measure "--mode=legacy" ${TARGET_REPOSITORY} ${IMAGE} "$additional_flags" ${CHUNKFLAG}
         fi
 
         if [ "${MODE}" == "${ESTARGZ_NOOPT_MODE}" ] ; then
             echo -n "" > "${TMP_LOG_FILE}"
             # disable prefetch
             DISABLE_PREFETCH="true" LOG_FILE="${TMP_LOG_FILE}" "${REBOOT_SCRIPT}"
-            measure "--mode=estargz-noopt" ${TARGET_REPOSITORY} ${IMAGE} "$additional_flags"
+            measure "--mode=estargz-noopt" ${TARGET_REPOSITORY} ${IMAGE} "$additional_flags" ${CHUNKFLAG}
             check_remote_snapshots "${TMP_LOG_FILE}"
         fi
 
         if [ "${MODE}" == "${ESTARGZ_MODE}" ] ; then
             echo -n "" > "${TMP_LOG_FILE}"
             LOG_FILE="${TMP_LOG_FILE}" "${REBOOT_SCRIPT}"
-            measure "--mode=estargz" ${TARGET_REPOSITORY} ${IMAGE} "$additional_flags"
+            measure "--mode=estargz" ${TARGET_REPOSITORY} ${IMAGE} "$additional_flags" ${CHUNKFLAG}
             check_remote_snapshots "${TMP_LOG_FILE}"
         fi
 
         if [ "${MODE}" == "${ZSTDCHUNKED_MODE}" ] ; then
             echo -n "" > "${TMP_LOG_FILE}"
             LOG_FILE="${TMP_LOG_FILE}" "${REBOOT_SCRIPT}"
-            measure "--mode=zstdchunked" ${TARGET_REPOSITORY} ${IMAGE} "$additional_flags"
+            measure "--mode=zstdchunked" ${TARGET_REPOSITORY} ${IMAGE} "$additional_flags" ${CHUNKFLAG}
             check_remote_snapshots "${TMP_LOG_FILE}"
         fi
     done

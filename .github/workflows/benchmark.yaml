@@ -1,9 +1,5 @@
 name: Benchmark
-on:
-  push:
-    branches:
-      - main
-  pull_request:
+on: [push]
 
 env:
   DOCKER_BUILDKIT: 1
@@ -16,16 +12,19 @@ jobs:
       BENCHMARK_LOG_DIR: ${{ github.workspace }}/log/
       BENCHMARK_RESULT_DIR: ${{ github.workspace }}/benchmark/
       BENCHMARK_REGISTRY: ghcr.io
-      BENCHMARK_USER: stargz-containers
-      BENCHMARK_TARGETS: python:3.10 gcc:11.2.0 postgres:14.2 tomcat:10.1.0-jdk17-openjdk-bullseye
-      BENCHMARK_SAMPLES_NUM: 5
-      BENCHMARK_PERCENTILE: 95
+      BENCHMARK_USER: ktock
+      BENCHMARK_TARGETS: python:3.9 tomcat:10.1.0-jdk17-openjdk-bullseye
+      BENCHMARK_SAMPLES_NUM: 20
+      BENCHMARK_PERCENTILE: 90
       BENCHMARK_PERCENTILES_GRANULARITY: 25
+      TARGET_MODES: "legacy estargz-noopt estargz-noopt_1000 estargz-noopt_10000 estargz-noopt_25000 estargz-noopt_50000 estargz estargz_1000 estargz_10000 estargz_25000 estargz_50000"
+      BENCHMARK_CHUNKS: "0 1000 10000 25000 50000"
+
     strategy:
       fail-fast: false
       max-parallel: 1
       matrix:
-        runtime: ["podman", "containerd"]
+        runtime: ["containerd"]
     steps:
     - name: Install tools
       run: |

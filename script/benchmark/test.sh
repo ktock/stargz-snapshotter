@@ -134,7 +134,7 @@ if ! ( cd "${CONTEXT}" && \
                           "${BENCHMARKING_NODE}" && \
            docker-compose -f "${DOCKER_COMPOSE_YAML}" up -d --force-recreate && \
            docker exec \
-		  -e BENCHMARK_RUNTIME_MODE -e BENCHMARK_SAMPLES_NUM -e BENCHMARK_PROFILE \
+		  -e BENCHMARK_RUNTIME_MODE -e BENCHMARK_SAMPLES_NUM -e BENCHMARK_PROFILE -e BENCHMARK_CHUNKS \
                   -i "${BENCHMARKING_CONTAINER}" \
                   script/benchmark/hello-bench/run.sh \
                   "${BENCHMARK_REGISTRY:-ghcr.io}/${BENCHMARK_USER}" \

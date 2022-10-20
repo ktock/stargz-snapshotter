@@ -1,0 +1,31 @@
+name: Bench
+on: [push]
+
+env:
+  DOCKER_BUILDKIT: 1
+
+jobs:
+  bench:
+    runs-on: ubuntu-22.04
+    name: Bench
+    env:
+      BENCHMARK_RESULT_DIR: ${{ github.workspace }}/benchmark/
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["ubuntu:22.04", "python:3.9-org", "kdeneon/plasma:latest"]
+        mode: ["1", "2"]
+    steps:
+    - uses: actions/checkout@v3
+    - name: Measure
+      id: measure
+      env:
+        MODE: ${{ matrix.mode }}
+      run: |
+        echo "ARTIFACT_NAME=$(echo -n ${{ matrix.image }} | sed 's/[\/:]/-/g')" >>$GITHUB_OUTPUT
+        mkdir -p ${{ env.BENCHMARK_RESULT_DIR }}
+        ./script/image-benchmark/run.sh ${{ matrix.image }} ghcr.io/stargz-containers ${{ env.BENCHMARK_RESULT_DIR }}
+    - uses: actions/upload-artifact@v3
+      with:
+        name: benchmarking-${{ matrix.mode }}-result-${{ steps.measure.outputs.ARTIFACT_NAME }}
+        path: ${{ env.BENCHMARK_RESULT_DIR }}

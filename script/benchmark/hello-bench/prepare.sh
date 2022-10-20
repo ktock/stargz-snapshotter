@@ -31,4 +31,11 @@ TARGET_REPOSITORY="${1}"
 TARGET_IMAGES=${@:2}
 
 DISABLE_ESTARGZ="true" "${REBOOT_CONTAINERD_SCRIPT}"
-"${MEASURING_SCRIPT}" --repository=${TARGET_REPOSITORY} --op=prepare ${TARGET_IMAGES}
+CHUNKS="0"
+if [ "${BENCHMARK_CHUNKS:-}" != "" ] ; then
+    CHUNKS="${BENCHMARK_CHUNKS}"
+fi
+
+for C in $CHUNKS ; do
+    "${MEASURING_SCRIPT}" --repository=${TARGET_REPOSITORY} --chunk=$C --op=prepare ${TARGET_IMAGES}
+done
