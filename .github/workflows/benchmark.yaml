@@ -1,0 +1,49 @@
+name: Benchmark
+on: [push]
+
+env:
+  DOCKER_BUILDKIT: 1
+
+jobs:
+  hello-bench:
+    runs-on: ubuntu-22.04
+    name: HelloBench
+    env:
+      BENCHMARK_LOG_DIR: ${{ github.workspace }}/log/
+      BENCHMARK_RESULT_DIR: ${{ github.workspace }}/benchmark/
+      BENCHMARK_REGISTRY: ghcr.io
+      BENCHMARK_USER: ktock
+      BENCHMARK_TARGETS: python:3.9 tomcat:10.1.0-jdk17-openjdk-bullseye
+      BENCHMARK_SAMPLES_NUM: 20
+      BENCHMARK_PERCENTILE: 95
+      BENCHMARK_PERCENTILES_GRANULARITY: 25
+      TARGET_MODES: "legacy estargz-noopt estargz-noopt_1000 estargz-noopt_10000 estargz-noopt_25000 estargz-noopt_50000 estargz estargz_1000 estargz_10000 estargz_25000 estargz_50000"
+      BENCHMARK_CHUNKS: "0 1000 10000 25000 50000"
+
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        runtime: ["containerd"]
+    steps:
+    - name: Install tools
+      run: |
+          sudo apt-get update && sudo apt-get --no-install-recommends install -y gnuplot
+          pip install numpy
+    - uses: actions/checkout@v3
+    - name: Prepare directories
+      run: mkdir "${BENCHMARK_RESULT_DIR}" "${BENCHMARK_LOG_DIR}"
+    - name: Get instance information
+      run: |
+          curl -H "Metadata:true" "http://169.254.169.254/metadata/instance?api-version=2019-11-01" | \
+          jq '{ location : .compute.location, vmSize : .compute.vmSize }' | \
+          tee ${{ env.BENCHMARK_RESULT_DIR }}/instance.json
+    - name: Run benchmark
+      env:
+        BENCHMARK_RUNTIME_MODE: ${{ matrix.runtime }}
+      run: make benchmark
+    - uses: actions/upload-artifact@v3
+      if: ${{ always() }}
+      with:
+        name: benchmarking-result-${{ matrix.runtime }}
+        path: ${{ env.BENCHMARK_RESULT_DIR }}

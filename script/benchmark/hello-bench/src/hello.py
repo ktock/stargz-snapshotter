@@ -75,15 +75,22 @@ def genargs_for_optimization(arg):
     else:
         return '-args \'["%s"]\'' % arg.replace('"', '\\\"').replace('\'', '\'"\'"\'')
 
-def format_repo(mode, repository, name):
+def format_repo(mode, repository, name, chunk=0):
+    ref = ""
     if mode == ESTARGZ_MODE:
-        return "%s/%s-esgz" % (repository, name)
+        ref = "%s/%s-esgz" % (repository, name)
     elif mode == ESTARGZ_NOOPT_MODE:
-        return "%s/%s-esgz-noopt" % (repository, name)
+        ref = "%s/%s-esgz-noopt" % (repository, name)
     elif mode == ZSTDCHUNKED_MODE:
-        return "%s/%s-zstdchunked" % (repository, name)
+        ref = "%s/%s-zstdchunked" % (repository, name)
     else:
-        return "%s/%s-org" % (repository, name)
+        ref = "%s/%s-org" % (repository, name)
+    if nonzero(chunk):
+        ref = "%s-%s" % (ref, chunk)
+    return ref
+
+def nonzero(n):
+    return n != '0' and n != 0
 
 class RunArgs:
     def __init__(self, env={}, arg='', stdin='', stdin_sh='sh', waitline='', mount=[]):
@@ -135,7 +142,7 @@ class BenchRunner:
     }
 
     CMD_ARG = {'perl:5.34.1': RunArgs(arg='perl -e \'print("hello\\n")\''),
-               'python:3.10': RunArgs(arg='python -c \'print("hello")\''),
+               'python:3.9': RunArgs(arg='python -c \'print("hello")\''),
                'pypy:3.9': RunArgs(arg='pypy3 -c \'print("hello")\''),
                'node:17.8.0': RunArgs(arg='node -e \'console.log("hello")\''),
     }
@@ -149,7 +156,7 @@ class BenchRunner:
                  Bench('postgres:14.2', 'database'),
                  Bench('redis:6.2.6', 'database'),
                  Bench('mariadb:10.7.3', 'database'),
-                 Bench('python:3.10', 'language'),
+                 Bench('python:3.9', 'language'),
                  Bench('golang:1.18', 'language'),
                  Bench('gcc:11.2.0', 'language'),
                  Bench('jruby:9.3.4', 'language'),
@@ -170,7 +177,7 @@ class BenchRunner:
                  Bench('nixos/nix:2.3.12'),
              ]])
 
-    def __init__(self, repository='docker.io/library', srcrepository='docker.io/library', mode=LEGACY_MODE, optimizer=DEFAULT_OPTIMIZER, puller=DEFAULT_PULLER, pusher=DEFAULT_PUSHER, runtime="containerd", profile=0):
+    def __init__(self, repository='docker.io/library', srcrepository='docker.io/library', mode=LEGACY_MODE, optimizer=DEFAULT_OPTIMIZER, puller=DEFAULT_PULLER, pusher=DEFAULT_PUSHER, runtime="containerd", profile=0, chunk=0):
         if runtime == "containerd":
             self.controller = ContainerdController(mode == ESTARGZ_NOOPT_MODE or mode == ESTARGZ_MODE or mode == ZSTDCHUNKED_MODE)
         elif runtime == "podman":
@@ -184,6 +191,7 @@ class BenchRunner:
         self.optimizer = optimizer
         self.puller = puller
         self.pusher = pusher
+        self.chunk = chunk
 
         profile = int(profile)
         if profile > 0:
@@ -193,7 +201,7 @@ class BenchRunner:
         self.controller.cleanup(cid, self.fully_qualify(bench.name))
 
     def fully_qualify(self, repo):
-        return format_repo(self.mode, self.repository, repo)
+        return format_repo(self.mode, self.repository, repo, self.chunk)
 
     def run_task(self, cid):
         cmd = self.controller.task_start_cmd(cid)
@@ -367,7 +375,10 @@ class BenchRunner:
 
     def convert_and_push_img(self, src, dest):
         self.pull_img(src)
-        cmd = '%s --no-optimize %s %s' % (self.optimizer, src, dest)
+        chunkflag = ''
+        if nonzero(self.chunk):
+            chunkflag = '--estargz-min-chunk-size=%s' % self.chunk
+        cmd = '%s %s --no-optimize %s %s' % (self.optimizer, chunkflag, src, dest)
         print cmd
         rc = os.system(cmd)
         assert(rc == 0)
@@ -375,6 +386,8 @@ class BenchRunner:
 
     def optimize_img(self, name, src, dest, option):
         self.pull_img(src)
+        if nonzero(self.chunk):
+            option = '%s --estargz-min-chunk-size=%s' % (option, self.chunk)
         if name in BenchRunner.ECHO_HELLO:
             self.convert_echo_hello(src=src, dest=dest, option=option)
         elif name in BenchRunner.CMD_ARG:
@@ -391,10 +404,12 @@ class BenchRunner:
     def prepare(self, bench):
         name = bench.name
         src = '%s/%s' % (self.srcrepository, name)
-        self.copy_img(src=src, dest=format_repo(LEGACY_MODE, self.repository, name))
-        self.convert_and_push_img(src=src, dest=format_repo(ESTARGZ_NOOPT_MODE, self.repository, name))
-        self.optimize_img(name=name, src=src, dest=format_repo(ESTARGZ_MODE, self.repository, name), option="")
-        self.optimize_img(name=name, src=src, dest=format_repo(ZSTDCHUNKED_MODE, self.repository, name), option="--zstdchunked")
+        if not nonzero(self.chunk):
+            self.copy_img(src=src, dest=format_repo(LEGACY_MODE, self.repository, name, self.chunk))
+        self.convert_and_push_img(src=src, dest=format_repo(ESTARGZ_NOOPT_MODE, self.repository, name, self.chunk))
+        self.optimize_img(name=name, src=src, dest=format_repo(ESTARGZ_MODE, self.repository, name, self.chunk), option="")
+        if not nonzero(self.chunk):
+            self.optimize_img(name=name, src=src, dest=format_repo(ZSTDCHUNKED_MODE, self.repository, name, self.chunk), option="--zstdchunked")
 
     def operation(self, op, bench, cid):
         if op == 'run':
@@ -579,6 +594,7 @@ def main():
         print '--profile=<seconds>'
         print '--runtime'
         print '--op=(prepare|run)'
+        print '--chunk=<size>'
         print '--mode=(%s|%s|%s)' % (LEGACY_MODE, ESTARGZ_NOOPT_MODE, ESTARGZ_MODE, ZSTDCHUNKED_MODE)
         exit(1)
 
@@ -642,7 +658,11 @@ def main():
             if profile > 0 and time.time() - for_start > profile:
                 break
 
-        row = {'mode':'%s' % runner.mode, 'repo':bench.name, 'bench':bench.name, 'elapsed':sum(elapsed_times) / len(elapsed_times), 'elapsed_pull':sum(pull_times) / len(pull_times), 'elapsed_create':sum(create_times) / len(create_times), 'elapsed_run':sum(run_times) / len(run_times)}
+        modename = runner.mode
+        if nonzero(runner.chunk):
+            modename = "%s_%s" % (modename, runner.chunk)
+
+        row = {'mode':'%s' % modename, 'repo':bench.name, 'bench':bench.name, 'elapsed':sum(elapsed_times) / len(elapsed_times), 'elapsed_pull':sum(pull_times) / len(pull_times), 'elapsed_create':sum(create_times) / len(create_times), 'elapsed_run':sum(run_times) / len(run_times)}
         js = json.dumps(row)
         print '%s%s,' % (BENCHMARKOUT_MARK, js)
         sys.stdout.flush()
