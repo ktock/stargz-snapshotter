@@ -21,56 +21,53 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"os/exec"
 	"path"
 
 	"github.com/containerd/containerd/remotes"
-	"github.com/ipfs/go-cid"
-	files "github.com/ipfs/go-ipfs-files"
-	iface "github.com/ipfs/interface-go-ipfs-core"
-	ipath "github.com/ipfs/interface-go-ipfs-core/path"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 type resolver struct {
-	api    iface.CoreAPI
-	scheme string
+	scheme   string
+	ipfsPath string
 }
 
 type ResolverOptions struct {
 	// Scheme is the scheme to fetch the specified IPFS content. "ipfs" or "ipns".
 	Scheme string
+
+	// IPFSPath is the path to the IPFS repository directory.
+	IPFSPath string
 }
 
-func NewResolver(client iface.CoreAPI, options ResolverOptions) (remotes.Resolver, error) {
+// func NewResolver(client iface.CoreAPI, options ResolverOptions) (remotes.Resolver, error) {
+func NewResolver(options ResolverOptions) (remotes.Resolver, error) {
 	s := options.Scheme
 	if s != "ipfs" && s != "ipns" {
 		return nil, fmt.Errorf("unsupported scheme %q", s)
 	}
-	return &resolver{client, s}, nil
+	return &resolver{
+		scheme:   s,
+		ipfsPath: options.IPFSPath,
+	}, nil
 }
 
 // Resolve resolves the provided ref for IPFS. ref must be a CID.
 // TODO: Allow specifying IPFS path or URL. This requires to modify `reference` pkg because
-//       it's incompatbile to the current reference specification.
+//
+//	it's incompatbile to the current reference specification.
 func (r *resolver) Resolve(ctx context.Context, ref string) (name string, desc ocispec.Descriptor, err error) {
-	c, err := cid.Decode(ref)
+	rc, err := ipfsCat(path.Join("/", r.scheme, ref), r.ipfsPath)
 	if err != nil {
 		return "", ocispec.Descriptor{}, err
 	}
-	p := ipath.New(path.Join("/", r.scheme, c.String()))
-	if err := p.IsValid(); err != nil {
-		return "", ocispec.Descriptor{}, err
-	}
-	n, err := r.api.Unixfs().Get(ctx, p)
-	if err != nil {
-		return "", ocispec.Descriptor{}, err
-	}
-	rc := files.ToFile(n)
 	defer rc.Close()
 	if err := json.NewDecoder(rc).Decode(&desc); err != nil {
 		return "", ocispec.Descriptor{}, err
 	}
-	if _, err := GetPath(desc); err != nil {
+	if _, err := GetCID(desc); err != nil {
 		return "", ocispec.Descriptor{}, err
 	}
 	return ref, desc, nil
@@ -89,13 +86,36 @@ type fetcher struct {
 }
 
 func (f *fetcher) Fetch(ctx context.Context, desc ocispec.Descriptor) (io.ReadCloser, error) {
-	p, err := GetPath(desc)
+	cid, err := GetCID(desc)
 	if err != nil {
 		return nil, err
 	}
-	n, err := f.r.api.Unixfs().Get(ctx, p)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get file %q: %w", p.String(), err)
+	return ipfsCat(cid, f.r.ipfsPath)
+}
+
+func ipfsCat(p string, ipfsPath string) (io.ReadCloser, error) {
+	cmd := exec.Command("ipfs", "cat", p)
+	if ipfsPath != "" {
+		cmd.Env = append(os.Environ(), fmt.Sprintf("IPFS_PATH=%s", ipfsPath))
 	}
-	return files.ToFile(n), nil
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	pr, pw := io.Pipe()
+	go func() {
+		if _, err := io.Copy(pw, stdout); err != nil {
+			pw.CloseWithError(err)
+			return
+		}
+		if err := cmd.Wait(); err != nil {
+			pw.CloseWithError(err)
+			return
+		}
+		pw.Close()
+	}()
+	return pr, nil
 }

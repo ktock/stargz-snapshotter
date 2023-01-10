@@ -21,6 +21,7 @@ REPO="${CONTEXT}../../"
 
 K3S_VERSION=master
 K3S_REPO=https://github.com/k3s-io/k3s
+K3S_CONTAINERD_REPO=https://github.com/k3s-io/containerd
 
 K3S_NODE_REPO=ghcr.io/stargz-containers
 K3S_NODE_IMAGE_NAME=k3s
@@ -31,10 +32,12 @@ K3S_CLUSTER_NAME="k3s-demo-cluster-$(date +%s%N | shasum | base64 | fold -w 10 |
 ORG_ARGOYAML=$(mktemp)
 TMP_K3S_REPO=$(mktemp -d)
 TMP_GOLANGCI=$(mktemp)
+TMP_K3S_CONTAINERD_REPO=$(mktemp -d)
 function cleanup {
     ORG_EXIT_CODE="${1}"
     rm "${ORG_ARGOYAML}" || true
     rm -rf "${TMP_K3S_REPO}" || true
+    rm -rf "${TMP_K3S_CONTAINERD_REPO}"
     exit "${ORG_EXIT_CODE}"
 }
 trap 'cleanup "$?"' EXIT SIGHUP SIGINT SIGQUIT SIGTERM
@@ -45,22 +48,6 @@ function argo_yaml() {
     local TMP_CUSTOM_ARGOYAML=$(mktemp)
     cp "${ORG_ARGOYAML}" "${TMP_CUSTOM_ARGOYAML}"
     sed -i 's|containerRuntimeExecutor: docker|containerRuntimeExecutor: pns|g' "${TMP_CUSTOM_ARGOYAML}"
-
-    local ARGOEXEC_IMAGE=argoproj/argoexec:v3.0.3
-    local ARGOEXEC_IMAGE_USE=ghcr.io/stargz-containers/argoproj-argoexec:v3.0.3-"${IMAGE_TYPE}"
-    replace_image "${TMP_CUSTOM_ARGOYAML}" "${ARGOEXEC_IMAGE}" "${ARGOEXEC_IMAGE_USE}"
-
-    local MINIO_IMAGE=minio/minio:RELEASE.2019-12-17T23-16-33Z
-    local MINIO_IMAGE_USE=ghcr.io/stargz-containers/minio:RELEASE.2019-12-17T23-16-33Z-"${IMAGE_TYPE}"
-    replace_image "${TMP_CUSTOM_ARGOYAML}" "${MINIO_IMAGE}" "${MINIO_IMAGE_USE}"
-
-    local ARGOWORKFLOW_IMAGE=argoproj/workflow-controller:v3.0.3
-    local ARGOWORKFLOW_IMAGE_USE=ghcr.io/stargz-containers/argoproj-workflow-controller:v3.0.3-"${IMAGE_TYPE}"
-    replace_image "${TMP_CUSTOM_ARGOYAML}" "${ARGOWORKFLOW_IMAGE}" "${ARGOWORKFLOW_IMAGE_USE}"
-
-    local ARGOCLI_IMAGE=argoproj/argocli:v3.0.3
-    local ARGOCLI_IMAGE_USE=ghcr.io/stargz-containers/argoproj-argocli:v3.0.3-"${IMAGE_TYPE}"
-    replace_image "${TMP_CUSTOM_ARGOYAML}" "${ARGOCLI_IMAGE}" "${ARGOCLI_IMAGE_USE}"
 
     cat "${TMP_CUSTOM_ARGOYAML}"
 
@@ -135,13 +122,27 @@ if [ "${RESULT_FILE}" == "" ] ; then
 fi
 echo "result to ${RESULT_FILE}"
 
-wget -O "${ORG_ARGOYAML}" https://raw.githubusercontent.com/argoproj/argo-workflows/stable/manifests/quick-start-minimal.yaml
+wget -O "${ORG_ARGOYAML}" https://raw.githubusercontent.com/argoproj/argo-workflows/v3.4.3/manifests/quick-start-minimal.yaml
 
 git clone -b ${K3S_VERSION} --depth 1 "${K3S_REPO}" "${TMP_K3S_REPO}"
-cat <<EOF >> "${TMP_K3S_REPO}/go.mod"
-replace github.com/containerd/stargz-snapshotter => "$(realpath ${REPO})"
-replace github.com/containerd/stargz-snapshotter/estargz => "$(realpath ${REPO}/estargz)"
-EOF
+CONTAINERD_VERSION=$(cat "${TMP_K3S_REPO}/go.mod" | grep "github.com/k3s-io/containerd" | sed -E 's/.*=> [^ ]* ([^ ]*).*/\1/' | tr -d '\n')
+
+# k3s doesn't imports the latest version of containerd that includes their own
+# CRI v1alpha API fork (github.com/containerd/containerd/third_party/k8s.io/cri-api/pkg/apis/runtime/v1alpha2).
+# So we bring our own CRI v1alpha API fork in our k3s test.
+#
+# TODO: Once k3s bring contianerd version to newer than 234bf990dca4e81e89f549448aa6b555286eaa7a, we can switch import
+# to github.com/containerd/stargz-snapshotter/service/plugin
+git clone -b ${CONTAINERD_VERSION} --depth 1 "${K3S_CONTAINERD_REPO}" "${TMP_K3S_CONTAINERD_REPO}"
+sed -i "s|github.com/containerd/stargz-snapshotter/service/plugin|github.com/containerd/stargz-snapshotter/service/pluginforked|g" "${TMP_K3S_CONTAINERD_REPO}/cmd/containerd/builtins_linux.go"
+sed -i "s|${K3S_CONTAINERD_REPO}|${TMP_K3S_CONTAINERD_REPO}|g" "${TMP_K3S_REPO}/go.mod"
+sed -i "s|github.com/k3s-io/stargz-snapshotter.*$|$(realpath ${REPO})|g" "${TMP_K3S_REPO}/go.mod"
+
+# typeurl version stargz-snapshotter indirectly depends on is incompatible to the one github.com/k3s-io/containerd depends on.
+# We use older version of typeurl which the both of the above are compatible to.
+echo "replace github.com/containerd/typeurl => github.com/containerd/typeurl v1.0.2" >> "${TMP_K3S_REPO}/go.mod"
+cat "${TMP_K3S_REPO}/go.mod"
+
 sed -i -E 's|(ENV DAPPER_RUN_ARGS .*)|\1 -v '"$(realpath ${REPO})":"$(realpath ${REPO})"':ro|g' "${TMP_K3S_REPO}/Dockerfile.dapper"
 sed -i -E 's|(ENV DAPPER_ENV .*)|\1 DOCKER_BUILDKIT|g' "${TMP_K3S_REPO}/Dockerfile.dapper"
 (

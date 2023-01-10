@@ -37,6 +37,7 @@ import (
 	"github.com/containerd/containerd/pkg/dialer"
 	"github.com/containerd/containerd/snapshots"
 	"github.com/containerd/containerd/sys"
+	runtime_alpha "github.com/containerd/containerd/third_party/k8s.io/cri-api/pkg/apis/runtime/v1alpha2"
 	dbmetadata "github.com/containerd/stargz-snapshotter/cmd/containerd-stargz-grpc/db"
 	ipfs "github.com/containerd/stargz-snapshotter/cmd/containerd-stargz-grpc/ipfs"
 	"github.com/containerd/stargz-snapshotter/fs"
@@ -44,6 +45,7 @@ import (
 	memorymetadata "github.com/containerd/stargz-snapshotter/metadata/memory"
 	"github.com/containerd/stargz-snapshotter/service"
 	"github.com/containerd/stargz-snapshotter/service/keychain/cri"
+	"github.com/containerd/stargz-snapshotter/service/keychain/crialpha"
 	"github.com/containerd/stargz-snapshotter/service/keychain/dockerconfig"
 	"github.com/containerd/stargz-snapshotter/service/keychain/kubeconfig"
 	"github.com/containerd/stargz-snapshotter/service/resolver"
@@ -57,7 +59,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials/insecure"
-	runtime "k8s.io/cri-api/pkg/apis/runtime/v1alpha2"
+	runtime "k8s.io/cri-api/pkg/apis/runtime/v1"
 )
 
 const (
@@ -152,28 +154,24 @@ func main() {
 			criAddr = cp
 		}
 		connectCRI := func() (runtime.ImageServiceClient, error) {
-			// TODO: make gRPC options configurable from config.toml
-			backoffConfig := backoff.DefaultConfig
-			backoffConfig.MaxDelay = 3 * time.Second
-			connParams := grpc.ConnectParams{
-				Backoff: backoffConfig,
-			}
-			gopts := []grpc.DialOption{
-				grpc.WithTransportCredentials(insecure.NewCredentials()),
-				grpc.WithConnectParams(connParams),
-				grpc.WithContextDialer(dialer.ContextDialer),
-				grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(defaults.DefaultMaxRecvMsgSize)),
-				grpc.WithDefaultCallOptions(grpc.MaxCallSendMsgSize(defaults.DefaultMaxSendMsgSize)),
-			}
-			conn, err := grpc.Dial(dialer.DialAddress(criAddr), gopts...)
+			conn, err := newCRIConn(criAddr)
 			if err != nil {
 				return nil, err
 			}
 			return runtime.NewImageServiceClient(conn), nil
 		}
+		connectAlphaCRI := func() (runtime_alpha.ImageServiceClient, error) {
+			conn, err := newCRIConn(criAddr)
+			if err != nil {
+				return nil, err
+			}
+			return runtime_alpha.NewImageServiceClient(conn), nil
+		}
 		f, criServer := cri.NewCRIKeychain(ctx, connectCRI)
+		fAlpha, criAlphaServer := crialpha.NewCRIAlphaKeychain(ctx, connectAlphaCRI)
 		runtime.RegisterImageServiceServer(rpc, criServer)
-		credsFuncs = append(credsFuncs, f)
+		runtime_alpha.RegisterImageServiceServer(rpc, criAlphaServer)
+		credsFuncs = append(credsFuncs, f, fAlpha)
 	}
 	fsOpts := []fs.Option{fs.WithMetricsLogLevel(logrus.InfoLevel)}
 	if config.IPFS {
@@ -312,4 +310,21 @@ func getMetadataStore(rootDir string, config snapshotterConfig) (metadata.Store,
 		return nil, fmt.Errorf("unknown metadata store type: %v; must be %v or %v",
 			config.MetadataStore, memoryMetadataType, dbMetadataType)
 	}
+}
+
+func newCRIConn(criAddr string) (*grpc.ClientConn, error) {
+	// TODO: make gRPC options configurable from config.toml
+	backoffConfig := backoff.DefaultConfig
+	backoffConfig.MaxDelay = 3 * time.Second
+	connParams := grpc.ConnectParams{
+		Backoff: backoffConfig,
+	}
+	gopts := []grpc.DialOption{
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithConnectParams(connParams),
+		grpc.WithContextDialer(dialer.ContextDialer),
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(defaults.DefaultMaxRecvMsgSize)),
+		grpc.WithDefaultCallOptions(grpc.MaxCallSendMsgSize(defaults.DefaultMaxSendMsgSize)),
+	}
+	return grpc.Dial(dialer.DialAddress(criAddr), gopts...)
 }

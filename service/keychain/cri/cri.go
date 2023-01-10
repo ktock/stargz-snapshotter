@@ -27,7 +27,7 @@ import (
 	"github.com/containerd/containerd/reference"
 	distribution "github.com/containerd/containerd/reference/docker"
 	"github.com/containerd/stargz-snapshotter/service/resolver"
-	runtime "k8s.io/cri-api/pkg/apis/runtime/v1alpha2"
+	runtime "k8s.io/cri-api/pkg/apis/runtime/v1"
 )
 
 // NewCRIKeychain provides creds passed through CRI PullImage API.

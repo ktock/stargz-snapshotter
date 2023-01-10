@@ -12,14 +12,14 @@
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
 
-ARG CONTAINERD_VERSION=v1.6.8
+ARG CONTAINERD_VERSION=v1.7.0-beta.2
 ARG RUNC_VERSION=v1.1.4
 ARG CNI_PLUGINS_VERSION=v1.1.1
-ARG NERDCTL_VERSION=0.23.0
+ARG NERDCTL_VERSION=1.0.0
 
-ARG PODMAN_VERSION=v4.2.1
+ARG PODMAN_VERSION=v4.3.1
 ARG CRIO_VERSION=v1.25.1
-ARG CONMON_VERSION=v2.1.4
+ARG CONMON_VERSION=v2.1.5
 ARG COMMON_VERSION=v0.49.2
 ARG CRIO_TEST_PAUSE_IMAGE_NAME=registry.k8s.io/pause:3.6
 
@@ -29,7 +29,7 @@ ARG CRI_TOOLS_VERSION=v1.25.0
 # Legacy builder that doesn't support TARGETARCH should set this explicitly using --build-arg.
 # If TARGETARCH isn't supported by the builder, the default value is "amd64".
 
-FROM golang:1.19.2-bullseye AS golang-base
+FROM golang:1.19.4-bullseye AS golang-base
 
 # Build containerd
 FROM golang-base AS containerd-dev
@@ -137,7 +137,7 @@ COPY --from=stargz-store-dev /out/* /
 FROM golang-base AS containerd-base
 ARG TARGETARCH
 ARG NERDCTL_VERSION
-RUN apt-get update -y && apt-get --no-install-recommends install -y fuse && \
+RUN apt-get update -y && apt-get --no-install-recommends install -y fuse3 && \
     curl -sSL --output /tmp/nerdctl.tgz https://github.com/containerd/nerdctl/releases/download/v${NERDCTL_VERSION}/nerdctl-${NERDCTL_VERSION}-linux-${TARGETARCH:-amd64}.tar.gz && \
     tar zxvf /tmp/nerdctl.tgz -C /usr/local/bin && \
     rm -f /tmp/nerdctl.tgz
@@ -153,7 +153,7 @@ RUN ln -s /usr/local/bin/ctr-remote /usr/local/bin/ctr
 FROM golang-base AS containerd-snapshotter-base
 ARG TARGETARCH
 ARG NERDCTL_VERSION
-RUN apt-get update -y && apt-get --no-install-recommends install -y fuse && \
+RUN apt-get update -y && apt-get --no-install-recommends install -y fuse3 && \
     curl -sSL --output /tmp/nerdctl.tgz https://github.com/containerd/nerdctl/releases/download/v${NERDCTL_VERSION}/nerdctl-${NERDCTL_VERSION}-linux-${TARGETARCH:-amd64}.tar.gz && \
     tar zxvf /tmp/nerdctl.tgz -C /usr/local/bin && \
     rm -f /tmp/nerdctl.tgz
@@ -167,7 +167,7 @@ FROM golang-base AS podman-base
 ARG TARGETARCH
 ARG CNI_PLUGINS_VERSION
 ARG PODMAN_VERSION
-RUN apt-get update -y && apt-get --no-install-recommends install -y fuse libgpgme-dev \
+RUN apt-get update -y && apt-get --no-install-recommends install -y fuse3 libgpgme-dev \
                          iptables libyajl-dev && \
     # Make CNI plugins manipulate iptables instead of nftables
     # as this test runs in a Docker container that network is configured with iptables.
@@ -196,14 +196,11 @@ RUN apt-get update && apt-get install -y iptables && \
     curl -Ls https://github.com/containernetworking/plugins/releases/download/${CNI_PLUGINS_VERSION}/cni-plugins-linux-${TARGETARCH:-amd64}-${CNI_PLUGINS_VERSION}.tgz | tar xzv -C /opt/cni/bin
 
 # Image which can be used as a node image for KinD (containerd with builtin snapshotter)
-FROM kindest/node:v1.25.2 AS kind-builtin-snapshotter
-# see https://medium.com/nttlabs/ubuntu-21-10-and-fedora-35-do-not-work-on-docker-20-10-9-1cd439d9921
-ADD https://github.com/AkihiroSuda/clone3-workaround/releases/download/v1.0.0/clone3-workaround.x86_64 /clone3-workaround
-RUN chmod 755 /clone3-workaround
+FROM kindest/node:v1.26.0 AS kind-builtin-snapshotter
 COPY --from=containerd-snapshotter-dev /out/bin/containerd /out/bin/containerd-shim-runc-v2 /usr/local/bin/
 COPY --from=snapshotter-dev /out/ctr-remote /usr/local/bin/
 COPY ./script/config/ /
-RUN /clone3-workaround apt-get update -y && /clone3-workaround apt-get install --no-install-recommends -y fuse
+RUN apt-get update -y && apt-get install --no-install-recommends -y fuse3
 ENTRYPOINT [ "/usr/local/bin/kind-entrypoint.sh", "/usr/local/bin/entrypoint", "/sbin/init" ]
 
 # Image for testing CRI-O with Stargz Store.
@@ -213,7 +210,7 @@ ARG CNI_PLUGINS_VERSION
 ARG CRIO_TEST_PAUSE_IMAGE_NAME
 ENV container docker
 RUN apt-get update -y && apt-get install --no-install-recommends -y \
-                         ca-certificates fuse libgpgme-dev libglib2.0-dev curl \
+                         ca-certificates fuse3 libgpgme-dev libglib2.0-dev curl \
                          iptables conntrack systemd systemd-sysv && \
     DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y tzdata && \
     # Make CNI plugins manipulate iptables instead of nftables
@@ -240,13 +237,10 @@ COPY ./script/config-cri-o/ /
 ENTRYPOINT [ "/usr/local/bin/entrypoint" ]
 
 # Image which can be used as a node image for KinD
-FROM kindest/node:v1.25.2
-# see https://medium.com/nttlabs/ubuntu-21-10-and-fedora-35-do-not-work-on-docker-20-10-9-1cd439d9921
-ADD https://github.com/AkihiroSuda/clone3-workaround/releases/download/v1.0.0/clone3-workaround.x86_64 /clone3-workaround
-RUN chmod 755 /clone3-workaround
+FROM kindest/node:v1.26.0
 COPY --from=containerd-dev /out/bin/containerd /out/bin/containerd-shim-runc-v2 /usr/local/bin/
 COPY --from=snapshotter-dev /out/* /usr/local/bin/
 COPY ./script/config/ /
-RUN /clone3-workaround apt-get update -y && /clone3-workaround apt-get install --no-install-recommends -y fuse && \
+RUN apt-get update -y && apt-get install --no-install-recommends -y fuse3 && \
     systemctl enable stargz-snapshotter
 ENTRYPOINT [ "/usr/local/bin/kind-entrypoint.sh", "/usr/local/bin/entrypoint", "/sbin/init" ]
