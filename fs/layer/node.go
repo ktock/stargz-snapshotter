@@ -34,11 +34,11 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-	"time"
+	// "time"
 
 	"github.com/containerd/log"
 	"github.com/containerd/stargz-snapshotter/estargz"
-	commonmetrics "github.com/containerd/stargz-snapshotter/fs/metrics/common"
+	// commonmetrics "github.com/containerd/stargz-snapshotter/fs/metrics/common"
 	"github.com/containerd/stargz-snapshotter/fs/reader"
 	"github.com/containerd/stargz-snapshotter/fs/remote"
 	"github.com/containerd/stargz-snapshotter/metadata"
@@ -165,8 +165,8 @@ func (n *node) Readdir(ctx context.Context) (fusefs.DirStream, syscall.Errno) {
 
 func (n *node) readdir() ([]fuse.DirEntry, syscall.Errno) {
 	// Measure how long node_readdir operation takes (in microseconds).
-	start := time.Now() // set start time
-	defer commonmetrics.MeasureLatencyInMicroseconds(commonmetrics.NodeReaddir, n.fs.layerDigest, start)
+	// start := time.Now() // set start time
+	// defer commonmetrics.MeasureLatencyInMicroseconds(commonmetrics.NodeReaddir, n.fs.layerDigest, start)
 
 	n.entsMu.Lock()
 	if n.entsCached {
@@ -430,8 +430,8 @@ type file struct {
 var _ = (fusefs.FileReader)((*file)(nil))
 
 func (f *file) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	defer commonmetrics.MeasureLatencyInMicroseconds(commonmetrics.ReadOnDemand, f.n.fs.layerDigest, time.Now()) // measure time for on-demand file reads (in microseconds)
-	defer commonmetrics.IncOperationCount(commonmetrics.OnDemandReadAccessCount, f.n.fs.layerDigest)             // increment the counter for on-demand file accesses
+	// defer commonmetrics.MeasureLatencyInMicroseconds(commonmetrics.ReadOnDemand, f.n.fs.layerDigest, time.Now()) // measure time for on-demand file reads (in microseconds)
+	// defer commonmetrics.IncOperationCount(commonmetrics.OnDemandReadAccessCount, f.n.fs.layerDigest)             // increment the counter for on-demand file accesses
 	n, err := f.ra.ReadAt(dest, off)
 	if err != nil && err != io.EOF {
 		f.n.fs.s.report(fmt.Errorf("file.Read: %v", err))

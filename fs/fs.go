@@ -50,15 +50,15 @@ import (
 	"github.com/containerd/stargz-snapshotter/estargz"
 	"github.com/containerd/stargz-snapshotter/fs/config"
 	"github.com/containerd/stargz-snapshotter/fs/layer"
-	commonmetrics "github.com/containerd/stargz-snapshotter/fs/metrics/common"
-	layermetrics "github.com/containerd/stargz-snapshotter/fs/metrics/layer"
+	// commonmetrics "github.com/containerd/stargz-snapshotter/fs/metrics/common"
+	// layermetrics "github.com/containerd/stargz-snapshotter/fs/metrics/layer"
 	"github.com/containerd/stargz-snapshotter/fs/remote"
 	"github.com/containerd/stargz-snapshotter/fs/source"
 	"github.com/containerd/stargz-snapshotter/metadata"
 	memorymetadata "github.com/containerd/stargz-snapshotter/metadata/memory"
 	"github.com/containerd/stargz-snapshotter/snapshot"
 	"github.com/containerd/stargz-snapshotter/task"
-	metrics "github.com/docker/go-metrics"
+	// metrics "github.com/docker/go-metrics"
 	fusefs "github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	digest "github.com/opencontainers/go-digest"
@@ -161,19 +161,19 @@ func NewFilesystem(root string, cfg config.Config, opts ...Option) (_ snapshot.F
 		return nil, fmt.Errorf("failed to setup resolver: %w", err)
 	}
 
-	var ns *metrics.Namespace
-	if !cfg.NoPrometheus {
-		ns = metrics.NewNamespace("stargz", "fs", nil)
-		logLevel := logrus.DebugLevel
-		if fsOpts.metricsLogLevel != nil {
-			logLevel = *fsOpts.metricsLogLevel
-		}
-		commonmetrics.Register(logLevel) // Register common metrics. This will happen only once.
-	}
-	c := layermetrics.NewLayerMetrics(ns)
-	if ns != nil {
-		metrics.Register(ns) // Register layer metrics.
-	}
+	// var ns *metrics.Namespace
+	// if !cfg.NoPrometheus {
+	// 	ns = metrics.NewNamespace("stargz", "fs", nil)
+		// logLevel := logrus.DebugLevel
+		// if fsOpts.metricsLogLevel != nil {
+		// 	logLevel = *fsOpts.metricsLogLevel
+		// }
+		// commonmetrics.Register(logLevel) // Register common metrics. This will happen only once.
+	// }
+	// c := layermetrics.NewLayerMetrics(ns)
+	// if ns != nil {
+	// 	metrics.Register(ns) // Register layer metrics.
+	// }
 
 	return &filesystem{
 		resolver:              r,
@@ -186,7 +186,7 @@ func NewFilesystem(root string, cfg config.Config, opts ...Option) (_ snapshot.F
 		backgroundTaskManager: tm,
 		allowNoVerification:   cfg.AllowNoVerification,
 		disableVerification:   cfg.DisableVerification,
-		metricsController:     c,
+		// metricsController:     c,
 		attrTimeout:           attrTimeout,
 		entryTimeout:          entryTimeout,
 	}, nil
@@ -204,7 +204,7 @@ type filesystem struct {
 	allowNoVerification   bool
 	disableVerification   bool
 	getSources            source.GetSources
-	metricsController     *layermetrics.Controller
+	// metricsController     *layermetrics.Controller
 	attrTimeout           time.Duration
 	entryTimeout          time.Duration
 }
@@ -325,14 +325,14 @@ func (fs *filesystem) Mount(ctx context.Context, mountpoint string, labels map[s
 	}
 
 	// Measuring duration of Mount operation for resolved layer.
-	digest := l.Info().Digest // get layer sha
-	defer commonmetrics.MeasureLatencyInMilliseconds(commonmetrics.Mount, digest, start)
+	// digest := l.Info().Digest // get layer sha
+	// defer commonmetrics.MeasureLatencyInMilliseconds(commonmetrics.Mount, digest, start)
 
 	// Register the mountpoint layer
 	fs.layerMu.Lock()
 	fs.layer[mountpoint] = l
 	fs.layerMu.Unlock()
-	fs.metricsController.Add(mountpoint, l)
+	// fs.metricsController.Add(mountpoint, l)
 
 	// mount the node to the specified mountpoint
 	// TODO: bind mount the state directory as a read-only fs on snapshotter's side
@@ -370,7 +370,7 @@ func (fs *filesystem) Check(ctx context.Context, mountpoint string, labels map[s
 	fs.backgroundTaskManager.DoPrioritizedTask()
 	defer fs.backgroundTaskManager.DonePrioritizedTask()
 
-	defer commonmetrics.MeasureLatencyInMilliseconds(commonmetrics.PrefetchesCompleted, digest.FromString(""), time.Now()) // measuring the time the container launch is blocked on prefetch to complete
+	// defer commonmetrics.MeasureLatencyInMilliseconds(commonmetrics.PrefetchesCompleted, digest.FromString(""), time.Now()) // measuring the time the container launch is blocked on prefetch to complete
 
 	ctx = log.WithLogger(ctx, log.G(ctx).WithField("mountpoint", mountpoint))
 
@@ -443,7 +443,7 @@ func (fs *filesystem) Unmount(ctx context.Context, mountpoint string) error {
 	delete(fs.layer, mountpoint) // unregisters the corresponding layer
 	l.Done()
 	fs.layerMu.Unlock()
-	fs.metricsController.Remove(mountpoint)
+	// fs.metricsController.Remove(mountpoint)
 
 	if err := unmount(mountpoint, 0); err != nil {
 		if err != unix.EBUSY {
@@ -478,7 +478,7 @@ func (fs *filesystem) prefetch(ctx context.Context, l layer.Layer, defaultPrefet
 		go func() {
 			if err := l.BackgroundFetch(); err == nil {
 				// write log record for the latency between mount start and last on demand fetch
-				commonmetrics.LogLatencyForLastOnDemandFetch(ctx, l.Info().Digest, start, l.Info().ReadTime)
+				// commonmetrics.LogLatencyForLastOnDemandFetch(ctx, l.Info().Digest, start, l.Info().ReadTime)
 			}
 		}()
 	}

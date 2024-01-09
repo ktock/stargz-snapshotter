@@ -36,7 +36,7 @@ import (
 
 	"github.com/containerd/stargz-snapshotter/cache"
 	"github.com/containerd/stargz-snapshotter/estargz"
-	commonmetrics "github.com/containerd/stargz-snapshotter/fs/metrics/common"
+	// commonmetrics "github.com/containerd/stargz-snapshotter/fs/metrics/common"
 	"github.com/containerd/stargz-snapshotter/metadata"
 	"github.com/hashicorp/go-multierror"
 	digest "github.com/opencontainers/go-digest"
@@ -485,15 +485,15 @@ func (sf *file) ReadAt(p []byte, offset int64) (int, error) {
 		nr += n
 	}
 
-	commonmetrics.AddBytesCount(commonmetrics.OnDemandBytesServed, sf.gr.layerSha, int64(nr)) // measure the number of on demand bytes served
+	// commonmetrics.AddBytesCount(commonmetrics.OnDemandBytesServed, sf.gr.layerSha, int64(nr)) // measure the number of on demand bytes served
 
 	return nr, nil
 }
 
 func (gr *reader) verifyAndCache(entryID uint32, ip []byte, chunkDigestStr string, cacheID string) error {
-	// We can end up doing on demand registry fetch when aligning the chunk
-	commonmetrics.IncOperationCount(commonmetrics.OnDemandRemoteRegistryFetchCount, gr.layerSha) // increment the number of on demand file fetches from remote registry
-	commonmetrics.AddBytesCount(commonmetrics.OnDemandBytesFetched, gr.layerSha, int64(len(ip))) // record total bytes fetched
+	// // We can end up doing on demand registry fetch when aligning the chunk
+	// commonmetrics.IncOperationCount(commonmetrics.OnDemandRemoteRegistryFetchCount, gr.layerSha) // increment the number of on demand file fetches from remote registry
+	// commonmetrics.AddBytesCount(commonmetrics.OnDemandBytesFetched, gr.layerSha, int64(len(ip))) // record total bytes fetched
 	gr.setLastReadTime(time.Now())
 
 	// Verify this chunk

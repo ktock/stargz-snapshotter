@@ -43,7 +43,7 @@ import (
 	"github.com/containerd/log"
 	"github.com/containerd/stargz-snapshotter/cache"
 	"github.com/containerd/stargz-snapshotter/fs/config"
-	commonmetrics "github.com/containerd/stargz-snapshotter/fs/metrics/common"
+	// commonmetrics "github.com/containerd/stargz-snapshotter/fs/metrics/common"
 	"github.com/containerd/stargz-snapshotter/fs/source"
 	"github.com/hashicorp/go-multierror"
 	rhttp "github.com/hashicorp/go-retryablehttp"
@@ -247,9 +247,9 @@ func newHTTPFetcher(ctx context.Context, fc *fetcherConfig) (*httpFetcher, int64
 
 		// Get size information
 		// TODO: we should try to use the Size field in the descriptor here.
-		start := time.Now() // start time before getting layer header
+		// start := time.Now() // start time before getting layer header
 		size, err := getSize(ctx, url, tr, timeout, header)
-		commonmetrics.MeasureLatencyInMilliseconds(commonmetrics.StargzHeaderGet, digest, start) // time to get layer header
+		// commonmetrics.MeasureLatencyInMilliseconds(commonmetrics.StargzHeaderGet, digest, start) // time to get layer header
 		if err != nil {
 			rErr = fmt.Errorf("failed to get size (host %q, ref:%q, digest:%q): %v: %w", host.Host, fc.refspec, digest, err, rErr)
 			continue // Try another
@@ -475,9 +475,9 @@ func (f *httpFetcher) fetch(ctx context.Context, rs []region, retry bool) (multi
 	req.Close = false
 
 	// Recording the roundtrip latency for remote registry GET operation.
-	start := time.Now()
+	// start := time.Now()
 	res, err := tr.RoundTrip(req) // NOT DefaultClient; don't want redirects
-	commonmetrics.MeasureLatencyInMilliseconds(commonmetrics.RemoteRegistryGet, f.digest, start)
+	// commonmetrics.MeasureLatencyInMilliseconds(commonmetrics.RemoteRegistryGet, f.digest, start)
 	if err != nil {
 		return nil, err
 	}

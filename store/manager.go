@@ -30,13 +30,13 @@ import (
 	"github.com/containerd/stargz-snapshotter/estargz/zstdchunked"
 	"github.com/containerd/stargz-snapshotter/fs/config"
 	"github.com/containerd/stargz-snapshotter/fs/layer"
-	layermetrics "github.com/containerd/stargz-snapshotter/fs/metrics/layer"
+	// layermetrics "github.com/containerd/stargz-snapshotter/fs/metrics/layer"
 	"github.com/containerd/stargz-snapshotter/fs/source"
 	"github.com/containerd/stargz-snapshotter/metadata"
 	esgzexternaltoc "github.com/containerd/stargz-snapshotter/nativeconverter/estargz/externaltoc"
 	"github.com/containerd/stargz-snapshotter/task"
 	"github.com/containerd/stargz-snapshotter/util/namedmutex"
-	"github.com/docker/go-metrics"
+	// "github.com/docker/go-metrics"
 	digest "github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
@@ -67,14 +67,14 @@ func NewLayerManager(ctx context.Context, root string, hosts source.RegistryHost
 	if err != nil {
 		return nil, fmt.Errorf("failed to setup resolver: %w", err)
 	}
-	var ns *metrics.Namespace
-	if !cfg.NoPrometheus {
-		ns = metrics.NewNamespace("stargz", "fs", nil)
-	}
-	c := layermetrics.NewLayerMetrics(ns)
-	if ns != nil {
-		metrics.Register(ns)
-	}
+	// var ns *metrics.Namespace
+	// if !cfg.NoPrometheus {
+	// 	ns = metrics.NewNamespace("stargz", "fs", nil)
+	// }
+	// c := layermetrics.NewLayerMetrics(ns)
+	// if ns != nil {
+	// 	metrics.Register(ns)
+	// }
 	return &LayerManager{
 		refPool:               refPool,
 		hosts:                 hosts,
@@ -85,7 +85,7 @@ func NewLayerManager(ctx context.Context, root string, hosts source.RegistryHost
 		backgroundTaskManager: tm,
 		allowNoVerification:   cfg.AllowNoVerification,
 		disableVerification:   cfg.DisableVerification,
-		metricsController:     c,
+		// metricsController:     c,
 		resolveLock:           new(namedmutex.NamedMutex),
 		layer:                 make(map[string]map[string]layer.Layer),
 		refcounter:            make(map[string]map[string]int),
@@ -104,7 +104,7 @@ type LayerManager struct {
 	backgroundTaskManager *task.BackgroundTaskManager
 	allowNoVerification   bool
 	disableVerification   bool
-	metricsController     *layermetrics.Controller
+	// metricsController     *layermetrics.Controller
 	resolveLock           *namedmutex.NamedMutex
 
 	layer      map[string]map[string]layer.Layer
@@ -318,7 +318,7 @@ func (r *LayerManager) resolveLayer(ctx context.Context, refspec reference.Spec,
 	// Cache this layer.
 	cachedL, added := r.cacheLayer(refspec, target.Digest, l)
 	if added {
-		r.metricsController.Add(key, cachedL)
+		// r.metricsController.Add(key, cachedL)
 	} else {
 		l.Done() // layer is already cached. use the cached one instead. discard this layer.
 	}
