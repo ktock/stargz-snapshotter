@@ -58,6 +58,8 @@ type Reader struct {
 	chunks map[string][]*TOCEntry
 
 	decompressor Decompressor
+
+	ReadSingleEntryMode bool
 }
 
 type openOpts struct {
@@ -119,6 +121,9 @@ func Open(sr *io.SectionReader, opt ...OpenOption) (*Reader, error) {
 
 	gzipCompressors := []Decompressor{new(GzipDecompressor), new(LegacyGzipDecompressor)}
 	decompressors := append(gzipCompressors, opts.decompressors...)
+	if len(opts.decompressors) > 0 {
+		decompressors = opts.decompressors
+	}
 
 	// Determine the size to fetch. Try to fetch as many bytes as possible.
 	fetchSize := maxFooterSize(sr.Size(), decompressors...)
@@ -169,6 +174,7 @@ func Open(sr *io.SectionReader, opt ...OpenOption) (*Reader, error) {
 	if err := r.initFields(); err != nil {
 		return nil, fmt.Errorf("failed to initialize fields of entries: %v", err)
 	}
+	r.ReadSingleEntryMode = true // TODO: make it configurable
 	return r, nil
 }
 
@@ -552,6 +558,93 @@ type fileReader struct {
 }
 
 func (fr *fileReader) ReadAt(p []byte, off int64) (n int, err error) {
+	if !fr.r.ReadSingleEntryMode {
+		return fr.readAtAll(p, off)
+	}
+	return fr.readSingleEntry(p, off)
+}
+
+func (fr *fileReader) readSingleEntry(p []byte, off int64) (n int, err error) {
+	if off >= fr.size {
+		return 0, io.EOF
+	}
+	if off < 0 {
+		return 0, errors.New("invalid offset")
+	}
+	var i int
+	if len(fr.ents) > 1 {
+		i = sort.Search(len(fr.ents), func(i int) bool {
+			return fr.ents[i].ChunkOffset >= off
+		})
+		if i == len(fr.ents) {
+			i = len(fr.ents) - 1
+		}
+	}
+	ent := fr.ents[i]
+	if ent.ChunkOffset > off {
+		if i == 0 {
+			return 0, errors.New("internal error; first chunk offset is non-zero")
+		}
+		ent = fr.ents[i-1]
+	}
+
+	off -= ent.ChunkOffset
+	finalEnt := ent
+	compressedOff := ent.Offset
+	compressedBytesRemain := finalEnt.NextOffset() - compressedOff
+
+	sr := io.NewSectionReader(fr.r.sr, compressedOff, compressedBytesRemain)
+
+	dr, err := fr.r.decompressor.Reader(sr)
+	if err != nil {
+		return 0, fmt.Errorf("fileReader.ReadAt.decompressor.Reader: %v", err)
+	}
+	defer dr.Close()
+
+	if fr.preRead == nil {
+		if n, err := io.CopyN(io.Discard, dr, ent.InnerOffset+off); n != ent.InnerOffset+off || err != nil {
+			return 0, fmt.Errorf("discard of %d bytes != %v, %v", ent.InnerOffset+off, n, err)
+		}
+		return io.ReadFull(dr, p)
+	}
+
+	var retN int
+	var retErr error
+	var found bool
+	var nr int64
+	for _, e := range fr.r.toc.Entries[ent.chunkTopIndex:] {
+		if !e.isDataType() {
+			continue
+		}
+		if e.Offset != fr.r.toc.Entries[ent.chunkTopIndex].Offset {
+			break
+		}
+		if in, err := io.CopyN(io.Discard, dr, e.InnerOffset-nr); err != nil || in != e.InnerOffset-nr {
+			return 0, fmt.Errorf("discard of remaining %d bytes != %v, %v", e.InnerOffset-nr, in, err)
+		}
+		nr = e.InnerOffset
+		if e == ent {
+			found = true
+			if n, err := io.CopyN(io.Discard, dr, off); n != off || err != nil {
+				return 0, fmt.Errorf("discard of offset %d bytes != %v, %v", off, n, err)
+			}
+			retN, retErr = io.ReadFull(dr, p)
+			nr += off + int64(retN)
+			continue
+		}
+		cr := &countReader{r: io.LimitReader(dr, e.ChunkSize)}
+		if err := fr.preRead(e, cr); err != nil {
+			return 0, fmt.Errorf("failed to pre read: %w", err)
+		}
+		nr += cr.n
+	}
+	if !found {
+		return 0, fmt.Errorf("fileReader.ReadAt: target entry not found")
+	}
+	return retN, retErr
+}
+
+func (fr *fileReader) readAtAll(p []byte, off int64) (n int, err error) {
 	if off >= fr.size {
 		return 0, io.EOF
 	}
