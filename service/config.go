@@ -35,6 +35,13 @@ type Config struct {
 
 	// SnapshotterConfig is snapshotter-related config.
 	SnapshotterConfig `toml:"snapshotter"`
+
+	ContainerdTransferKeychainConfig `toml:"containerd_transfer_keychain"`
+}
+
+type ContainerdTransferKeychainConfig struct {
+	ContainerdAddress   string `toml:"containerd_address"`
+	ContainerdNamespace string `toml:"containerd_namespace"`
 }
 
 // KubeconfigKeychainConfig is config for kubeconfig-based keychain.
