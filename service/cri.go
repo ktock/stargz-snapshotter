@@ -20,13 +20,13 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/containerd/containerd/reference"
+	"github.com/containerd/containerd/v2/pkg/reference"
 	"github.com/containerd/stargz-snapshotter/fs/source"
 	digest "github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
-// TODO: switch to "github.com/containerd/containerd/pkg/snapshotters" once all tools using
+// TODO: switch to "github.com/containerd/containerd/v2/pkg/snapshotters" once all tools using
 //
 //	stargz-snapshotter (e.g. k3s) move to containerd version where that pkg is available.
 const (

@@ -411,7 +411,7 @@ class ContainerdController:
         self.is_lazypull = is_lazypull
 
     def pull_cmd(self, image):
-        base_cmd = "%s i pull" % CTR
+        base_cmd = "%s i pull --local" % CTR
         if self.is_lazypull:
             base_cmd = "ctr-remote i rpull"
         cmd = '%s %s' % (base_cmd, image)

@@ -145,11 +145,11 @@ function optimize {
     local DST="${2}"
     local PLAINHTTP="${3}"
     local OPTS=${@:4}
-    ctr-remote image pull -u "${DUMMYUSER}:${DUMMYPASS}" "${SRC}"
+    ctr-remote i pull --local -u "${DUMMYUSER}:${DUMMYPASS}" "${SRC}"
     ctr-remote image optimize ${OPTS} --oci "${SRC}" "${DST}"
     PUSHOPTS=
     if [ "${PLAINHTTP}" == "true" ] ; then
-        PUSHOPTS=--plain-http
+        PUSHOPTS="--plain-http --local"
     fi
     ctr-remote image push ${PUSHOPTS} -u "${DUMMYUSER}:${DUMMYPASS}" "${DST}"
 }
@@ -161,9 +161,9 @@ function convert {
     local OPTS=${@:4}
     PUSHOPTS=
     if [ "${PLAINHTTP}" == "true" ] ; then
-        PUSHOPTS=--plain-http
+        PUSHOPTS="--plain-http --local"
     fi
-    ctr-remote image pull -u "${DUMMYUSER}:${DUMMYPASS}" "${SRC}"
+    ctr-remote i pull --local -u "${DUMMYUSER}:${DUMMYPASS}" "${SRC}"
     ctr-remote image convert ${OPTS} --oci "${SRC}" "${DST}"
     ctr-remote image push ${PUSHOPTS} -u "${DUMMYUSER}:${DUMMYPASS}" "${DST}"
 }
@@ -171,7 +171,7 @@ function convert {
 function copy {
     local SRC="${1}"
     local DST="${2}"
-    ctr-remote i pull --all-platforms "${SRC}"
+    ctr-remote i pull --local --all-platforms "${SRC}"
     ctr-remote i tag "${SRC}" "${DST}"
     ctr-remote i push -u "${DUMMYUSER}:${DUMMYPASS}" "${DST}"
 }
@@ -202,7 +202,7 @@ function dump_dir {
     if [ "${REMOTE}" == "true" ] ; then
         run_and_check_remote_snapshots ctr-remote images rpull --user "${DUMMYUSER}:${DUMMYPASS}" "${IMAGE}"
     else
-        ctr-remote images pull --snapshotter="${SNAPSHOTTER}" --user "${DUMMYUSER}:${DUMMYPASS}" "${IMAGE}"
+        ctr-remote i pull --local --snapshotter="${SNAPSHOTTER}" --user "${DUMMYUSER}:${DUMMYPASS}" "${IMAGE}"
     fi
     copy_out_dir "${IMAGE}" "${TARGETDIR}" "${DEST}" "${SNAPSHOTTER}"
 }
@@ -294,21 +294,21 @@ if [ "${BUILTIN_SNAPSHOTTER}" != "true" ] ; then
     retry curl -X POST localhost:5001/api/v0/version >/dev/null 2>&1 # wait for up
 
     # stargz snapshotter (default labels)
-    ctr-remote i pull --user "${DUMMYUSER}:${DUMMYPASS}" "${REGISTRY_HOST}/ubuntu:22.04"
+    ctr-remote i pull --local --user "${DUMMYUSER}:${DUMMYPASS}" "${REGISTRY_HOST}/ubuntu:22.04"
     CID=$(ctr-remote i ipfs-push "${REGISTRY_HOST}/ubuntu:22.04")
     reboot_containerd
     run_and_check_remote_snapshots ctr-remote i rpull --ipfs "${CID}"
     copy_out_dir "${CID}" "/usr" "${USR_STARGZSN_IPFS}" "stargz"
 
     # stargz snapshotter (containerd labels)
-    ctr-remote i pull --user "${DUMMYUSER}:${DUMMYPASS}" "${REGISTRY_HOST}/ubuntu:22.04"
+    ctr-remote i pull --local --user "${DUMMYUSER}:${DUMMYPASS}" "${REGISTRY_HOST}/ubuntu:22.04"
     CID=$(ctr-remote i ipfs-push "${REGISTRY_HOST}/ubuntu:22.04")
     reboot_containerd
     run_and_check_remote_snapshots ctr-remote i rpull --use-containerd-labels --ipfs "${CID}"
     copy_out_dir "${CID}" "/usr" "${USR_STARGZSN_CTD_IPFS}" "stargz"
 
     # overlayfs snapshotter
-    ctr-remote i pull --user "${DUMMYUSER}:${DUMMYPASS}" "${REGISTRY_HOST}/ubuntu:22.04"
+    ctr-remote i pull --local --user "${DUMMYUSER}:${DUMMYPASS}" "${REGISTRY_HOST}/ubuntu:22.04"
     CID=$(ctr-remote i ipfs-push --estargz=false "${REGISTRY_HOST}/ubuntu:22.04")
     reboot_containerd
     ctr-remote i rpull --snapshotter=overlayfs --ipfs "${CID}"
@@ -329,7 +329,7 @@ echo "Testing refreshing and mirror..."
 
 reboot_containerd
 echo "Getting image with normal snapshotter..."
-ctr-remote images pull --user "${DUMMYUSER}:${DUMMYPASS}" "${REGISTRY_HOST}/alpine:esgz"
+ctr-remote i pull --local --user "${DUMMYUSER}:${DUMMYPASS}" "${REGISTRY_HOST}/alpine:esgz"
 copy_out_dir "${REGISTRY_HOST}/alpine:esgz" "/usr" "${USR_ORG}" "overlayfs"
 
 echo "Getting image with stargz snapshotter..."

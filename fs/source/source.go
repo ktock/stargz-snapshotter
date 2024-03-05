@@ -21,10 +21,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/containerd/containerd/images"
-	"github.com/containerd/containerd/labels"
-	"github.com/containerd/containerd/reference"
-	"github.com/containerd/containerd/remotes/docker"
+	"github.com/containerd/containerd/v2/core/images"
+	"github.com/containerd/containerd/v2/core/remotes/docker"
+	"github.com/containerd/containerd/v2/pkg/labels"
+	"github.com/containerd/containerd/v2/pkg/reference"
 	"github.com/containerd/stargz-snapshotter/fs/config"
 	digest "github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -201,7 +201,7 @@ func appendWithValidation(key string, values []string) string {
 	return strings.TrimSuffix(v, ",")
 }
 
-// TODO: switch to "github.com/containerd/containerd/pkg/snapshotters" once all tools using
+// TODO: switch to "github.com/containerd/containerd/v2/pkg/snapshotters" once all tools using
 //
 //	stargz-snapshotter (e.g. k3s) move to containerd version where that pkg is available.
 const (
@@ -212,7 +212,7 @@ const (
 )
 
 // AppendExtraLabelsHandler adds optional labels that aren't provided by
-// "github.com/containerd/containerd/pkg/snapshotters" but can be used for stargz snapshotter's extra functionalities.
+// "github.com/containerd/containerd/v2/pkg/snapshotters" but can be used for stargz snapshotter's extra functionalities.
 func AppendExtraLabelsHandler(prefetchSize int64, wrapper func(images.Handler) images.Handler) func(images.Handler) images.Handler {
 	return func(f images.Handler) images.Handler {
 		return images.HandlerFunc(func(ctx context.Context, desc ocispec.Descriptor) ([]ocispec.Descriptor, error) {

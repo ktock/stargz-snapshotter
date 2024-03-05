@@ -25,12 +25,12 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/containerd/containerd/errdefs"
-	"github.com/containerd/containerd/mount"
-	"github.com/containerd/containerd/pkg/testutil"
-	"github.com/containerd/containerd/snapshots"
-	"github.com/containerd/containerd/snapshots/storage"
-	"github.com/containerd/containerd/snapshots/testsuite"
+	"github.com/containerd/containerd/v2/core/mount"
+	"github.com/containerd/containerd/v2/core/snapshots"
+	"github.com/containerd/containerd/v2/core/snapshots/storage"
+	"github.com/containerd/containerd/v2/core/snapshots/testsuite"
+	"github.com/containerd/errdefs"
+	"github.com/stretchr/testify/assert"
 )
 
 const (
@@ -52,7 +52,7 @@ func prepareWithTarget(t *testing.T, sn snapshots.Snapshotter, target, key, pare
 }
 
 func TestRemotePrepare(t *testing.T) {
-	testutil.RequiresRoot(t)
+	RequiresRoot(t)
 	ctx := context.TODO()
 	root, err := os.MkdirTemp("", "overlay")
 	if err != nil {
@@ -103,7 +103,7 @@ func TestRemotePrepare(t *testing.T) {
 }
 
 func TestRemoteOverlay(t *testing.T) {
-	testutil.RequiresRoot(t)
+	RequiresRoot(t)
 	ctx := context.TODO()
 	root, err := os.MkdirTemp("", "remote")
 	if err != nil {
@@ -162,7 +162,7 @@ func TestRemoteOverlay(t *testing.T) {
 }
 
 func TestRemoteCommit(t *testing.T) {
-	testutil.RequiresRoot(t)
+	RequiresRoot(t)
 	ctx := context.TODO()
 	root, err := os.MkdirTemp("", "remote")
 	if err != nil {
@@ -232,7 +232,7 @@ func TestRemoteCommit(t *testing.T) {
 }
 
 func TestFailureDetection(t *testing.T) {
-	testutil.RequiresRoot(t)
+	RequiresRoot(t)
 	tests := []struct {
 		name    string
 		broken  []bool // top element is the lowest layer
@@ -447,7 +447,7 @@ func newSnapshotter(ctx context.Context, root string) (snapshots.Snapshotter, fu
 }
 
 func TestOverlay(t *testing.T) {
-	testutil.RequiresRoot(t)
+	RequiresRoot(t)
 	testsuite.SnapshotterSuite(t, "Overlay", newSnapshotter)
 }
 
@@ -594,7 +594,7 @@ func getParents(ctx context.Context, sn snapshots.Snapshotter, root, key string)
 }
 
 func TestOverlayOverlayRead(t *testing.T) {
-	testutil.RequiresRoot(t)
+	RequiresRoot(t)
 	ctx := context.TODO()
 	root, err := os.MkdirTemp("", "overlay")
 	if err != nil {
@@ -717,4 +717,8 @@ func TestOverlayView(t *testing.T) {
 	if m.Options[0] != expected {
 		t.Errorf("expected option %q but received %q", expected, m.Options[0])
 	}
+}
+
+func RequiresRoot(t testing.TB) {
+	assert.Equal(t, 0, os.Getuid(), "This test must be run as root.")
 }

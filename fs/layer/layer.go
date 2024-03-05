@@ -32,13 +32,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/containerd/containerd/reference"
+	"github.com/containerd/containerd/v2/pkg/reference"
 	"github.com/containerd/log"
 	"github.com/containerd/stargz-snapshotter/cache"
 	"github.com/containerd/stargz-snapshotter/estargz"
 	"github.com/containerd/stargz-snapshotter/estargz/zstdchunked"
 	"github.com/containerd/stargz-snapshotter/fs/config"
-	commonmetrics "github.com/containerd/stargz-snapshotter/fs/metrics/common"
+	// commonmetrics "github.com/containerd/stargz-snapshotter/fs/metrics/common"
 	"github.com/containerd/stargz-snapshotter/fs/reader"
 	"github.com/containerd/stargz-snapshotter/fs/remote"
 	"github.com/containerd/stargz-snapshotter/fs/source"
@@ -287,25 +287,26 @@ func (r *Resolver) Resolve(ctx context.Context, hosts source.RegistryHosts, refs
 		defer r.backgroundTaskManager.DonePrioritizedTask()
 		return blobR.ReadAt(p, offset)
 	}), 0, blobR.Size())
-	// define telemetry hooks to measure latency metrics inside estargz package
-	telemetry := metadata.Telemetry{
-		GetFooterLatency: func(start time.Time) {
-			commonmetrics.MeasureLatencyInMilliseconds(commonmetrics.StargzFooterGet, desc.Digest, start)
-		},
-		GetTocLatency: func(start time.Time) {
-			commonmetrics.MeasureLatencyInMilliseconds(commonmetrics.StargzTocGet, desc.Digest, start)
-		},
-		DeserializeTocLatency: func(start time.Time) {
-			commonmetrics.MeasureLatencyInMilliseconds(commonmetrics.DeserializeTocJSON, desc.Digest, start)
-		},
-	}
+	// // define telemetry hooks to measure latency metrics inside estargz package
+	// telemetry := metadata.Telemetry{
+	// 	GetFooterLatency: func(start time.Time) {
+	// 		commonmetrics.MeasureLatencyInMilliseconds(commonmetrics.StargzFooterGet, desc.Digest, start)
+	// 	},
+	// 	GetTocLatency: func(start time.Time) {
+	// 		commonmetrics.MeasureLatencyInMilliseconds(commonmetrics.StargzTocGet, desc.Digest, start)
+	// 	},
+	// 	DeserializeTocLatency: func(start time.Time) {
+	// 		commonmetrics.MeasureLatencyInMilliseconds(commonmetrics.DeserializeTocJSON, desc.Digest, start)
+	// 	},
+	// }
 
 	additionalDecompressors := []metadata.Decompressor{new(zstdchunked.Decompressor)}
 	if r.additionalDecompressors != nil {
 		additionalDecompressors = append(additionalDecompressors, r.additionalDecompressors(ctx, hosts, refspec, desc)...)
 	}
 	meta, err := r.metadataStore(sr,
-		append(esgzOpts, metadata.WithTelemetry(&telemetry), metadata.WithDecompressors(additionalDecompressors...))...)
+		append(esgzOpts, metadata.WithDecompressors(additionalDecompressors...))...)
+	// append(esgzOpts, metadata.WithTelemetry(&telemetry), metadata.WithDecompressors(additionalDecompressors...))...)
 	if err != nil {
 		return nil, err
 	}
@@ -475,10 +476,10 @@ func (l *layer) Prefetch(prefetchSize int64) (err error) {
 func (l *layer) prefetch(ctx context.Context, prefetchSize int64) error {
 	defer l.prefetchWaiter.done() // Notify the completion
 	// Measuring the total time to complete prefetch (use defer func() because l.Info().PrefetchSize is set later)
-	start := time.Now()
-	defer func() {
-		commonmetrics.WriteLatencyWithBytesLogValue(ctx, l.desc.Digest, commonmetrics.PrefetchTotal, start, commonmetrics.PrefetchSize, l.prefetchedSize())
-	}()
+	// start := time.Now()
+	// defer func() {
+	// 	commonmetrics.WriteLatencyWithBytesLogValue(ctx, l.desc.Digest, commonmetrics.PrefetchTotal, start, commonmetrics.PrefetchSize, l.prefetchedSize())
+	// }()
 
 	if l.isClosed() {
 		return fmt.Errorf("layer is already closed")
@@ -500,9 +501,9 @@ func (l *layer) prefetch(ctx context.Context, prefetchSize int64) error {
 	}
 
 	// Fetch the target range
-	downloadStart := time.Now()
+	// downloadStart := time.Now()
 	err := l.blob.Cache(0, prefetchSize)
-	commonmetrics.WriteLatencyLogValue(ctx, l.desc.Digest, commonmetrics.PrefetchDownload, downloadStart) // time to download prefetch data
+	// commonmetrics.WriteLatencyLogValue(ctx, l.desc.Digest, commonmetrics.PrefetchDownload, downloadStart) // time to download prefetch data
 
 	if err != nil {
 		return fmt.Errorf("failed to prefetch layer: %w", err)
@@ -514,11 +515,11 @@ func (l *layer) prefetch(ctx context.Context, prefetchSize int64) error {
 	l.prefetchSizeMu.Unlock()
 
 	// Cache uncompressed contents of the prefetched range
-	decompressStart := time.Now()
+	// decompressStart := time.Now()
 	err = l.verifiableReader.Cache(reader.WithFilter(func(offset int64) bool {
 		return offset < prefetchSize // Cache only prefetch target
 	}))
-	commonmetrics.WriteLatencyLogValue(ctx, l.desc.Digest, commonmetrics.PrefetchDecompress, decompressStart) // time to decompress prefetch data
+	// commonmetrics.WriteLatencyLogValue(ctx, l.desc.Digest, commonmetrics.PrefetchDecompress, decompressStart) // time to decompress prefetch data
 	if err != nil {
 		return fmt.Errorf("failed to cache prefetched layer: %w", err)
 	}
@@ -547,14 +548,14 @@ func (l *layer) BackgroundFetch() (err error) {
 }
 
 func (l *layer) backgroundFetch(ctx context.Context) error {
-	defer commonmetrics.WriteLatencyLogValue(ctx, l.desc.Digest, commonmetrics.BackgroundFetchTotal, time.Now())
+	// defer commonmetrics.WriteLatencyLogValue(ctx, l.desc.Digest, commonmetrics.BackgroundFetchTotal, time.Now())
 	if l.isClosed() {
 		return fmt.Errorf("layer is already closed")
 	}
 	br := io.NewSectionReader(readerAtFunc(func(p []byte, offset int64) (retN int, retErr error) {
 		l.resolver.backgroundTaskManager.InvokeBackgroundTask(func(ctx context.Context) {
 			// Measuring the time to download background fetch data (in milliseconds)
-			defer commonmetrics.MeasureLatencyInMilliseconds(commonmetrics.BackgroundFetchDownload, l.Info().Digest, time.Now()) // time to download background fetch data
+			// defer commonmetrics.MeasureLatencyInMilliseconds(commonmetrics.BackgroundFetchDownload, l.Info().Digest, time.Now()) // time to download background fetch data
 			retN, retErr = l.blob.ReadAt(
 				p,
 				offset,
@@ -564,7 +565,7 @@ func (l *layer) backgroundFetch(ctx context.Context) error {
 		}, 120*time.Second)
 		return
 	}), 0, l.blob.Size())
-	defer commonmetrics.WriteLatencyLogValue(ctx, l.desc.Digest, commonmetrics.BackgroundFetchDecompress, time.Now()) // time to decompress background fetch data (in milliseconds)
+	// defer commonmetrics.WriteLatencyLogValue(ctx, l.desc.Digest, commonmetrics.BackgroundFetchDecompress, time.Now()) // time to decompress background fetch data (in milliseconds)
 	return l.verifiableReader.Cache(
 		reader.WithReader(br),                // Read contents in background
 		reader.WithCacheOpts(cache.Direct()), // Do not pollute mem cache
