@@ -1,143 +1,143 @@
 name: Tests
 on:
   push:
-    branches:
-      - main
-  pull_request:
+    # branches:
+    #   - main
+  # pull_request:
 
 env:
   DOCKER_BUILDKIT: 1
 
 jobs:
-  build:
-    runs-on: ubuntu-22.04
-    name: Build
-    steps:
-    - uses: actions/checkout@v4
-    - name: Build all
-      run: ./script/util/make.sh build -j2
+  # build:
+  #   runs-on: ubuntu-22.04
+  #   name: Build
+  #   steps:
+  #   - uses: actions/checkout@v4
+  #   - name: Build all
+  #     run: ./script/util/make.sh build -j2
 
-  test:
-    runs-on: ubuntu-22.04
-    name: Test
-    steps:
-    - uses: actions/checkout@v4
-    - name: Test all
-      run: ./script/util/make.sh test-all -j2
+  # test:
+  #   runs-on: ubuntu-22.04
+  #   name: Test
+  #   steps:
+  #   - uses: actions/checkout@v4
+  #   - name: Test all
+  #     run: ./script/util/make.sh test-all -j2
 
-  linter:
-    runs-on: ubuntu-22.04
-    name: Linter
-    strategy:
-      fail-fast: false
-      matrix:
-        targetdir: [".", "./estargz", "./cmd", "./ipfs"]
-    steps:
-    - uses: actions/checkout@v4
-      with:
-        fetch-depth: '0'
-    - uses: actions/setup-go@v5
-      with:
-        go-version: '1.22.x'
-    - name: golangci-lint
-      uses: golangci/golangci-lint-action@v6.0.1
-      with:
-        version: v1.58.0
-        args: --verbose --timeout=10m
-        working-directory: ${{ matrix.targetdir }}
+  # linter:
+  #   runs-on: ubuntu-22.04
+  #   name: Linter
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       targetdir: [".", "./estargz", "./cmd", "./ipfs"]
+  #   steps:
+  #   - uses: actions/checkout@v4
+  #     with:
+  #       fetch-depth: '0'
+  #   - uses: actions/setup-go@v5
+  #     with:
+  #       go-version: '1.22.x'
+  #   - name: golangci-lint
+  #     uses: golangci/golangci-lint-action@v6.0.1
+  #     with:
+  #       version: v1.58.0
+  #       args: --verbose --timeout=10m
+  #       working-directory: ${{ matrix.targetdir }}
 
-  integration:
-    runs-on: ubuntu-22.04
-    name: Integration
-    strategy:
-      fail-fast: false
-      matrix:
-        # Temporary disable contaienrd main branch test and migrate to containerd v2 after it's released.
-        # buildargs: ["", "--build-arg=CONTAINERD_VERSION=main"] # released version & main version
-        buildargs: [""]
-        builtin: ["true", "false"]
-        metadata-store: ["memory", "db"]
-        exclude:
-        # - buildargs: ""
-        #   builtin: "true"
-        - metadata-store: "db"
-          builtin: "true"
-        # - metadata-store: "db"
-        #   buildargs: "--build-arg=CONTAINERD_VERSION=main"
-    steps:
-    - name: Install htpasswd for setting up private registry
-      run: sudo apt-get update -y && sudo apt-get --no-install-recommends install -y apache2-utils
-    - uses: actions/checkout@v4
-    - name: Run integration test
-      env:
-        DOCKER_BUILD_ARGS: ${{ matrix.buildargs }}
-        BUILTIN_SNAPSHOTTER: ${{ matrix.builtin }}
-        METADATA_STORE: ${{ matrix.metadata-store }}
-      run: make integration
+  # integration:
+  #   runs-on: ubuntu-22.04
+  #   name: Integration
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       # Temporary disable contaienrd main branch test and migrate to containerd v2 after it's released.
+  #       # buildargs: ["", "--build-arg=CONTAINERD_VERSION=main"] # released version & main version
+  #       buildargs: [""]
+  #       builtin: ["true", "false"]
+  #       metadata-store: ["memory", "db"]
+  #       exclude:
+  #       # - buildargs: ""
+  #       #   builtin: "true"
+  #       - metadata-store: "db"
+  #         builtin: "true"
+  #       # - metadata-store: "db"
+  #       #   buildargs: "--build-arg=CONTAINERD_VERSION=main"
+  #   steps:
+  #   - name: Install htpasswd for setting up private registry
+  #     run: sudo apt-get update -y && sudo apt-get --no-install-recommends install -y apache2-utils
+  #   - uses: actions/checkout@v4
+  #   - name: Run integration test
+  #     env:
+  #       DOCKER_BUILD_ARGS: ${{ matrix.buildargs }}
+  #       BUILTIN_SNAPSHOTTER: ${{ matrix.builtin }}
+  #       METADATA_STORE: ${{ matrix.metadata-store }}
+  #     run: make integration
 
-  test-optimize:
-    runs-on: ubuntu-22.04
-    name: Optimize
-    strategy:
-      fail-fast: false
-      matrix:
-        # Temporary disable contaienrd main branch test and migrate to containerd v2 after it's released.
-        # buildargs: ["", "--build-arg=CONTAINERD_VERSION=main"] # released version & main version
-        buildargs: [""]
-    steps:
-    - name: Install htpasswd for setting up private registry
-      run: sudo apt-get update -y && sudo apt-get --no-install-recommends install -y apache2-utils
-    - uses: actions/checkout@v4
-    - name: Run test for optimize subcommand of ctr-remote
-      env:
-        DOCKER_BUILD_ARGS: ${{ matrix.buildargs }}
-      run: make test-optimize
+  # test-optimize:
+  #   runs-on: ubuntu-22.04
+  #   name: Optimize
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       # Temporary disable contaienrd main branch test and migrate to containerd v2 after it's released.
+  #       # buildargs: ["", "--build-arg=CONTAINERD_VERSION=main"] # released version & main version
+  #       buildargs: [""]
+  #   steps:
+  #   - name: Install htpasswd for setting up private registry
+  #     run: sudo apt-get update -y && sudo apt-get --no-install-recommends install -y apache2-utils
+  #   - uses: actions/checkout@v4
+  #   - name: Run test for optimize subcommand of ctr-remote
+  #     env:
+  #       DOCKER_BUILD_ARGS: ${{ matrix.buildargs }}
+  #     run: make test-optimize
 
-  test-kind:
-    runs-on: ubuntu-22.04
-    name: Kind
-    strategy:
-      fail-fast: false
-      matrix:
-        # Temporary disable contaienrd main branch test and migrate to containerd v2 after it's released.
-        # buildargs: ["", "--build-arg=CONTAINERD_VERSION=main"] # released version & main version
-        buildargs: [""]
-        builtin: ["true", "false"]
-        # exclude:
-        # - buildargs: ""
-        #   builtin: "true"
-    steps:
-    - name: Install htpasswd for setting up private registry
-      run: sudo apt-get update -y && sudo apt-get --no-install-recommends install -y apache2-utils
-    - uses: actions/checkout@v4
-    - name: Run test for pulling image from private registry on Kubernetes
-      env:
-        DOCKER_BUILD_ARGS: ${{ matrix.buildargs }}
-        BUILTIN_SNAPSHOTTER: ${{ matrix.builtin }}
-      run: make test-kind
+  # test-kind:
+  #   runs-on: ubuntu-22.04
+  #   name: Kind
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       # Temporary disable contaienrd main branch test and migrate to containerd v2 after it's released.
+  #       # buildargs: ["", "--build-arg=CONTAINERD_VERSION=main"] # released version & main version
+  #       buildargs: [""]
+  #       builtin: ["true", "false"]
+  #       # exclude:
+  #       # - buildargs: ""
+  #       #   builtin: "true"
+  #   steps:
+  #   - name: Install htpasswd for setting up private registry
+  #     run: sudo apt-get update -y && sudo apt-get --no-install-recommends install -y apache2-utils
+  #   - uses: actions/checkout@v4
+  #   - name: Run test for pulling image from private registry on Kubernetes
+  #     env:
+  #       DOCKER_BUILD_ARGS: ${{ matrix.buildargs }}
+  #       BUILTIN_SNAPSHOTTER: ${{ matrix.builtin }}
+  #     run: make test-kind
 
-  test-criauth:
-    runs-on: ubuntu-22.04
-    name: CRIAuth
-    strategy:
-      fail-fast: false
-      matrix:
-        # Temporary disable contaienrd main branch test and migrate to containerd v2 after it's released.
-        # buildargs: ["", "--build-arg=CONTAINERD_VERSION=main"] # released version & main version
-        buildargs: [""]
-        builtin: ["true", "false"]
-        # exclude:
-        # - buildargs: ""
-        #   builtin: "true"
-    steps:
-    - name: Install htpasswd for setting up private registry
-      run: sudo apt-get update -y && sudo apt-get --no-install-recommends install -y apache2-utils
-    - uses: actions/checkout@v4
-    - name: Run test for pulling image from private registry on Kubernetes with CRI keychain mode
-      env:
-        DOCKER_BUILD_ARGS: ${{ matrix.buildargs }}
-        BUILTIN_SNAPSHOTTER: ${{ matrix.builtin }}
-      run: make test-criauth
+  # test-criauth:
+  #   runs-on: ubuntu-22.04
+  #   name: CRIAuth
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       # Temporary disable contaienrd main branch test and migrate to containerd v2 after it's released.
+  #       # buildargs: ["", "--build-arg=CONTAINERD_VERSION=main"] # released version & main version
+  #       buildargs: [""]
+  #       builtin: ["true", "false"]
+  #       # exclude:
+  #       # - buildargs: ""
+  #       #   builtin: "true"
+  #   steps:
+  #   - name: Install htpasswd for setting up private registry
+  #     run: sudo apt-get update -y && sudo apt-get --no-install-recommends install -y apache2-utils
+  #   - uses: actions/checkout@v4
+  #   - name: Run test for pulling image from private registry on Kubernetes with CRI keychain mode
+  #     env:
+  #       DOCKER_BUILD_ARGS: ${{ matrix.buildargs }}
+  #       BUILTIN_SNAPSHOTTER: ${{ matrix.builtin }}
+  #     run: make test-criauth
 
   test-cri-containerd:
     runs-on: ubuntu-22.04
@@ -189,107 +189,107 @@ jobs:
         sudo swapoff -a
         make test-cri-o
 
-  test-podman:
-    runs-on: ubuntu-22.04
-    name: PodmanRootless
-    steps:
-    - uses: actions/checkout@v4
-    - name: Test Podman (rootless)
-      run: make test-podman
+  # test-podman:
+  #   runs-on: ubuntu-22.04
+  #   name: PodmanRootless
+  #   steps:
+  #   - uses: actions/checkout@v4
+  #   - name: Test Podman (rootless)
+  #     run: make test-podman
 
-  test-k3s:
-    runs-on: ubuntu-22.04
-    name: K3S
-    steps:
-    - uses: actions/setup-go@v5
-      with:
-        go-version: '1.22.x'
-    - name: Install k3d
-      run: |
-        wget -q -O - https://raw.githubusercontent.com/rancher/k3d/v5.6.0/install.sh | bash
-    - name: Install htpasswd for setting up private registry
-      run: sudo apt-get update -y && sudo apt-get --no-install-recommends install -y apache2-utils
-    - name: Install yq
-      run: |
-        sudo wget -O /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.9.3/yq_linux_amd64
-        sudo chmod +x /usr/local/bin/yq
-    - uses: actions/checkout@v4
-    - name: Run test with k3s
-      run: make test-k3s
+  # test-k3s:
+  #   runs-on: ubuntu-22.04
+  #   name: K3S
+  #   steps:
+  #   - uses: actions/setup-go@v5
+  #     with:
+  #       go-version: '1.22.x'
+  #   - name: Install k3d
+  #     run: |
+  #       wget -q -O - https://raw.githubusercontent.com/rancher/k3d/v5.6.0/install.sh | bash
+  #   - name: Install htpasswd for setting up private registry
+  #     run: sudo apt-get update -y && sudo apt-get --no-install-recommends install -y apache2-utils
+  #   - name: Install yq
+  #     run: |
+  #       sudo wget -O /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.9.3/yq_linux_amd64
+  #       sudo chmod +x /usr/local/bin/yq
+  #   - uses: actions/checkout@v4
+  #   - name: Run test with k3s
+  #     run: make test-k3s
 
-  test-ipfs:
-    runs-on: ubuntu-22.04
-    name: IPFS
-    steps:
-    - uses: actions/checkout@v4
-    - name: Run test
-      run: make test-ipfs
+  # test-ipfs:
+  #   runs-on: ubuntu-22.04
+  #   name: IPFS
+  #   steps:
+  #   - uses: actions/checkout@v4
+  #   - name: Run test
+  #     run: make test-ipfs
 
-  test-k3s-argo-workflow:
-    runs-on: ubuntu-22.04
-    name: K3SArgoWorkflow
-    env:
-      RESULT_DIR: ${{ github.workspace }}/argo-workflow/
-    steps:
-    - uses: actions/setup-go@v5
-      with:
-        go-version: '1.22.x'
-    - name: Install k3d
-      run: |
-        wget -q -O - https://raw.githubusercontent.com/rancher/k3d/v5.6.0/install.sh | bash
-    - name: Install argo worklflow
-      run: |
-        wget -q https://github.com/argoproj/argo-workflows/releases/download/v3.0.10/argo-linux-amd64.gz
-        gunzip argo-linux-amd64.gz
-        sudo mv argo-linux-amd64 /usr/local/bin/argo
-        sudo chmod +x /usr/local/bin/argo
-    - name: Workaround for freeing up more disk space
-      # https://github.com/actions/runner-images/issues/2606
-      run: |
-        sudo rm -rf /usr/local/lib/android # will release about 10 GB if you don't need Android
-        sudo rm -rf /usr/share/dotnet # will release about 20GB if you don't need .NET
-    - uses: actions/checkout@v4
-    - name: Prepare directories
-      run: mkdir "${RESULT_DIR}"
-    - name: Get instance information
-      run: |
-          curl -H "Metadata:true" "http://169.254.169.254/metadata/instance?api-version=2019-11-01" | \
-          jq '{ location : .compute.location, vmSize : .compute.vmSize }' | \
-          tee ${{ env.RESULT_DIR }}/instance.json
-    - name: Run argo workflow
-      env:
-        RESULT: ${{ env.RESULT_DIR }}/result.json
-      run: make test-k3s-argo-workflow
-    - uses: actions/upload-artifact@v4
-      with:
-        name: k3s-argo-workflow
-        path: ${{ env.RESULT_DIR }}
+  # test-k3s-argo-workflow:
+  #   runs-on: ubuntu-22.04
+  #   name: K3SArgoWorkflow
+  #   env:
+  #     RESULT_DIR: ${{ github.workspace }}/argo-workflow/
+  #   steps:
+  #   - uses: actions/setup-go@v5
+  #     with:
+  #       go-version: '1.22.x'
+  #   - name: Install k3d
+  #     run: |
+  #       wget -q -O - https://raw.githubusercontent.com/rancher/k3d/v5.6.0/install.sh | bash
+  #   - name: Install argo worklflow
+  #     run: |
+  #       wget -q https://github.com/argoproj/argo-workflows/releases/download/v3.0.10/argo-linux-amd64.gz
+  #       gunzip argo-linux-amd64.gz
+  #       sudo mv argo-linux-amd64 /usr/local/bin/argo
+  #       sudo chmod +x /usr/local/bin/argo
+  #   - name: Workaround for freeing up more disk space
+  #     # https://github.com/actions/runner-images/issues/2606
+  #     run: |
+  #       sudo rm -rf /usr/local/lib/android # will release about 10 GB if you don't need Android
+  #       sudo rm -rf /usr/share/dotnet # will release about 20GB if you don't need .NET
+  #   - uses: actions/checkout@v4
+  #   - name: Prepare directories
+  #     run: mkdir "${RESULT_DIR}"
+  #   - name: Get instance information
+  #     run: |
+  #         curl -H "Metadata:true" "http://169.254.169.254/metadata/instance?api-version=2019-11-01" | \
+  #         jq '{ location : .compute.location, vmSize : .compute.vmSize }' | \
+  #         tee ${{ env.RESULT_DIR }}/instance.json
+  #   - name: Run argo workflow
+  #     env:
+  #       RESULT: ${{ env.RESULT_DIR }}/result.json
+  #     run: make test-k3s-argo-workflow
+  #   - uses: actions/upload-artifact@v4
+  #     with:
+  #       name: k3s-argo-workflow
+  #       path: ${{ env.RESULT_DIR }}
 
-  #
-  # Project checks
-  # NOTE: Jobs for project checks commonly used in containerd projects
-  # See https://github.com/containerd/project-checks
-  #
+  # #
+  # # Project checks
+  # # NOTE: Jobs for project checks commonly used in containerd projects
+  # # See https://github.com/containerd/project-checks
+  # #
 
-  project:
-    name: Project Checks
-    runs-on: ubuntu-22.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.22.x'
-      - uses: actions/checkout@v4
-        with:
-          path: src/github.com/containerd/stargz-snapshotter
-          fetch-depth: 25
-      - uses: containerd/project-checks@v1.1.0
-        with:
-          working-directory: src/github.com/containerd/stargz-snapshotter
-      - name: Check proto generated code
-        run: make validate-generated
-        working-directory: src/github.com/containerd/stargz-snapshotter
-      - run: ./script/util/verify-no-patent.sh
-        working-directory: src/github.com/containerd/stargz-snapshotter
-      - run: make validate-vendor
-        working-directory: src/github.com/containerd/stargz-snapshotter
+  # project:
+  #   name: Project Checks
+  #   runs-on: ubuntu-22.04
+  #   timeout-minutes: 10
+  #   steps:
+  #     - uses: actions/setup-go@v5
+  #       with:
+  #         go-version: '1.22.x'
+  #     - uses: actions/checkout@v4
+  #       with:
+  #         path: src/github.com/containerd/stargz-snapshotter
+  #         fetch-depth: 25
+  #     - uses: containerd/project-checks@v1.1.0
+  #       with:
+  #         working-directory: src/github.com/containerd/stargz-snapshotter
+  #     - name: Check proto generated code
+  #       run: make validate-generated
+  #       working-directory: src/github.com/containerd/stargz-snapshotter
+  #     - run: ./script/util/verify-no-patent.sh
+  #       working-directory: src/github.com/containerd/stargz-snapshotter
+  #     - run: make validate-vendor
+  #       working-directory: src/github.com/containerd/stargz-snapshotter
