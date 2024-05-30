@@ -77,8 +77,8 @@ RUN apt-get update -y && apt-get install -y libbtrfs-dev libseccomp-dev && \
     echo 'package main \nimport _ "github.com/containerd/stargz-snapshotter/service/plugin"' > cmd/containerd/builtins_stargz_snapshotter.go && \
     make vendor && make && DESTDIR=/out/ PREFIX= make install
 
-# Build runc
-FROM golang-base AS runc-dev
+# Build runc (Explicitly on 1.21 due to compilation issue)
+FROM golang:1.21.5-bullseye AS runc-dev
 ARG RUNC_VERSION
 RUN apt-get update -y && apt-get install -y libseccomp-dev && \
     git clone -b ${RUNC_VERSION} --depth 1 \
