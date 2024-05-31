@@ -129,3 +129,5 @@ require (
 
 // Import local package for estargz.
 replace github.com/containerd/stargz-snapshotter/estargz => ./estargz
+
+replace github.com/containerd/containerd/v2 => github.com/ktock/containerd/v2 v2.0.0-20240531090845-0e8cc9146381

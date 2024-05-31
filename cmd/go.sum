@@ -31,8 +31,6 @@ github.com/containerd/console v1.0.4 h1:F2g4+oChYvBTsASRTz8NP6iIAi97J3TtSAsLbIFn
 github.com/containerd/console v1.0.4/go.mod h1:YynlIjWYF8myEu6sdkwKIvGQq+cOckRm6So2avqoYAk=
 github.com/containerd/containerd/api v1.8.0-rc.0 h1:g3tto9iJ+iaxkZEfyfOYHF3awmzloi0jq+nnYjhysFE=
 github.com/containerd/containerd/api v1.8.0-rc.0/go.mod h1:UfMc6fIM+QEhf9/S1XbToiERqHK3/1G/vNnGk+++cZk=
-github.com/containerd/containerd/v2 v2.0.0-rc.2 h1:Nlkwfsr3zi7fS4WKENW5c4Pfb6x+P189xIw4jNWZAXc=
-github.com/containerd/containerd/v2 v2.0.0-rc.2/go.mod h1:GW/XfYoxFuOH4jjtlWmcq5gf80/ZqEbuG1wdSBFKjtk=
 github.com/containerd/continuity v0.4.3 h1:6HVkalIp+2u1ZLH1J/pYX2oBVXlJZvh1X1A7bEZ9Su8=
 github.com/containerd/continuity v0.4.3/go.mod h1:F6PTNCKepoxEaXLQp3wDAjygEnImnZ/7o4JzpodfroQ=
 github.com/containerd/errdefs v0.1.0 h1:m0wCRBiu1WJT/Fr+iOoQHMQS/eP5myQ8lCv4Dz5ZURM=
@@ -196,6 +194,8 @@ github.com/kr/pty v1.1.1/go.mod h1:pFQYn66WHrOpPYNljwOMqo10TkYh1fy3cYio2l3bCsQ=
 github.com/kr/text v0.1.0/go.mod h1:4Jbv+DJW3UT/LiOwJeYQe1efqtUx/iVham/4vfdArNI=
 github.com/kr/text v0.2.0 h1:5Nx0Ya0ZqY2ygV366QzturHI13Jq95ApcVaJBhpS+AY=
 github.com/kr/text v0.2.0/go.mod h1:eLer722TekiGuMkidMxC/pM04lWEeraHUUmBw8l2grE=
+github.com/ktock/containerd/v2 v2.0.0-20240531090845-0e8cc9146381 h1:NpGlqy/aSMD3JqusD99BGBkExajVMFQ1owKinmTIl1o=
+github.com/ktock/containerd/v2 v2.0.0-20240531090845-0e8cc9146381/go.mod h1:OSPGVYaAqCEEpF4pmFIUwap/820hiftl6uvoGHVp+LA=
 github.com/kylelemons/godebug v0.0.0-20170820004349-d65d576e9348 h1:MtvEpTB6LX3vkb4ax0b5D2DHbNAUsen0Gx5wZoq3lV4=
 github.com/kylelemons/godebug v0.0.0-20170820004349-d65d576e9348/go.mod h1:B69LEHPfb2qLo0BaaOLcbitczOKLWTsrBG9LczfCD4k=
 github.com/mailru/easyjson v0.7.7 h1:UGYAvKxe3sBsEDzO8ZeWOSlIQfWFlxbzLZe7hwFURr0=

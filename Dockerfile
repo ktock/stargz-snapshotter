@@ -12,7 +12,7 @@
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
 
-ARG CONTAINERD_VERSION=v2.0.0-rc.2
+ARG CONTAINERD_VERSION=transfer-push-dup
 ARG RUNC_VERSION=v1.1.12
 ARG CNI_PLUGINS_VERSION=v1.4.1
 ARG NERDCTL_VERSION=1.7.6
@@ -41,7 +41,7 @@ FROM golang-base AS containerd-dev
 ARG CONTAINERD_VERSION
 RUN apt-get update -y && apt-get install -y libbtrfs-dev libseccomp-dev && \
     git clone -b ${CONTAINERD_VERSION} --depth 1 \
-              https://github.com/containerd/containerd $GOPATH/src/github.com/containerd/containerd && \
+              https://github.com/ktock/containerd $GOPATH/src/github.com/containerd/containerd && \
     cd $GOPATH/src/github.com/containerd/containerd && \
     make && DESTDIR=/out/ PREFIX= make install
 
@@ -51,7 +51,7 @@ ARG CONTAINERD_VERSION
 COPY . $GOPATH/src/github.com/containerd/stargz-snapshotter
 RUN apt-get update -y && apt-get install -y libbtrfs-dev libseccomp-dev && \
     git clone -b ${CONTAINERD_VERSION} --depth 1 \
-      https://github.com/containerd/containerd $GOPATH/src/github.com/containerd/containerd && \
+      https://github.com/ktock/containerd $GOPATH/src/github.com/containerd/containerd && \
     cd $GOPATH/src/github.com/containerd/containerd && \
     echo 'require github.com/containerd/stargz-snapshotter v0.0.0' >> go.mod && \
     echo 'replace github.com/containerd/stargz-snapshotter => '$GOPATH'/src/github.com/containerd/stargz-snapshotter' >> go.mod && \
