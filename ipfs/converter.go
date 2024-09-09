@@ -84,6 +84,7 @@ func pushBlobHook(client *ipfsclient.Client) converter.ConvertHookFunc {
 		if err != nil {
 			return nil, err
 		}
+		defer ra.Close()
 		cidv1, err := client.Add(content.NewReader(ra))
 		if err != nil {
 			return nil, err
