@@ -30,6 +30,7 @@ import (
 	"github.com/containerd/platforms"
 	ipfsclient "github.com/containerd/stargz-snapshotter/ipfs/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/containerd/containerd/v2/core/images"
 )
 
 // Push pushes the provided image ref to IPFS with converting it to IPFS-enabled format.
@@ -43,10 +44,6 @@ func PushWithIPFSPath(ctx context.Context, client *containerd.Client, ref string
 		return "", err
 	}
 	defer done(ctx)
-	img, err := client.ImageService().Get(ctx, ref)
-	if err != nil {
-		return "", err
-	}
 	var ipath string
 	if idir := os.Getenv("IPFS_PATH"); idir != "" {
 		ipath = idir
@@ -60,13 +57,19 @@ func PushWithIPFSPath(ctx context.Context, client *containerd.Client, ref string
 		return "", err
 	}
 	iclient := ipfsclient.New(iurl)
-	desc, err := converter.IndexConvertFuncWithHook(layerConvert, true, platformMC, converter.ConvertHooks{
-		PostConvertHook: pushBlobHook(iclient),
-	})(ctx, client.ContentStore(), img.Target)
+
+	pushRef := ref + "-tmp-esgz"
+	pimg, err := converter.Convert(ctx, client, pushRef, ref,
+		converter.WithIndexConvertFunc(converter.IndexConvertFuncWithHook(layerConvert, true, platformMC, converter.ConvertHooks{
+			PostConvertHook: pushBlobHook(iclient),
+		})),
+	)
 	if err != nil {
 		return "", err
 	}
-	root, err := json.Marshal(desc)
+	defer client.ImageService().Delete(ctx, pimg.Name, images.SynchronousDelete())
+
+	root, err := json.Marshal(pimg.Target)
 	if err != nil {
 		return "", err
 	}
