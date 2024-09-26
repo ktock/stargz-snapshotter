@@ -18,7 +18,7 @@ ARG CNI_PLUGINS_VERSION=v1.4.1
 ARG NERDCTL_VERSION=1.7.6
 
 ARG PODMAN_VERSION=v5.1.1
-ARG CRIO_VERSION=main
+ARG CRIO_VERSION=check-layer-state
 ARG CONMON_VERSION=v2.1.11
 ARG COMMON_VERSION=v0.58.2
 ARG CRIO_TEST_PAUSE_IMAGE_NAME=registry.k8s.io/pause:3.6
@@ -124,11 +124,11 @@ RUN apt-get update -y && apt-get install -y libseccomp-dev libgpgme-dev && \
 FROM golang:1.22-bullseye AS cri-o-dev
 ARG CRIO_VERSION
 RUN apt-get update -y && apt-get install -y libseccomp-dev libgpgme-dev && \
-    git clone https://github.com/cri-o/cri-o $GOPATH/src/github.com/cri-o/cri-o && \
+    git clone https://github.com/ktock/cri-o $GOPATH/src/github.com/cri-o/cri-o && \
     cd $GOPATH/src/github.com/cri-o/cri-o && \
     git checkout ${CRIO_VERSION} && \
     make && make install PREFIX=/out/ && \
-    curl -sSL --output /out/crio.service https://raw.githubusercontent.com/cri-o/cri-o/${CRIO_VERSION}/contrib/systemd/crio.service
+    curl -sSL --output /out/crio.service https://raw.githubusercontent.com/ktock/cri-o/${CRIO_VERSION}/contrib/systemd/crio.service
 
 # Build conmon
 FROM golang-base AS conmon-dev
@@ -270,7 +270,7 @@ ARG CRIO_TEST_PAUSE_IMAGE_NAME
 ENV container docker
 RUN apt-get update -y && apt-get install --no-install-recommends -y \
                          ca-certificates fuse3 libgpgme-dev libglib2.0-dev curl \
-                         iptables conntrack systemd systemd-sysv && \
+                         iptables conntrack systemd systemd-sysv wget && \
     DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y tzdata && \
     # Make CNI plugins manipulate iptables instead of nftables
     # as this test runs in a Docker container that network is configured with iptables.
@@ -292,6 +292,8 @@ COPY --from=runc-dev /out/sbin/* /usr/local/sbin/
 COPY --from=conmon-dev /out/bin/* /usr/local/bin/
 COPY --from=containers-common-dev /out/seccomp.json /usr/share/containers/
 COPY ./script/config-cri-o/ /
+RUN wget -O /usr/local/sbin/crun https://github.com/containers/crun/releases/download/1.17/crun-1.17-linux-arm64 && \
+    chmod u+x /usr/local/sbin/crun
 
 ENTRYPOINT [ "/usr/local/bin/entrypoint" ]
 
