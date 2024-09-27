@@ -61,8 +61,8 @@ graphroot = "/var/lib/containers/storage"
 runroot = "/run/containers/storage"
 EOF
 
-# Update state marker (disable lazy pulling) and repair the storage
-crio check --repair --check-layer-state --state-marker="" --state-file=/tmp/layerstate/state
+# # Update state marker (disable lazy pulling) and repair the storage
+# crio check --repair --check-layer-state --state-marker="" --state-file=/tmp/layerstate/state
 
 # Restart CRI-O
 systemctl restart crio
