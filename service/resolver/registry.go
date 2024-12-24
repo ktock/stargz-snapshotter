@@ -17,6 +17,7 @@
 package resolver
 
 import (
+	"crypto/tls"
 	"fmt"
 	"net/http"
 	"time"
@@ -53,6 +54,8 @@ type MirrorConfig struct {
 
 	// Header are additional headers to send to the server
 	Header map[string]interface{} `toml:"header"`
+
+	InsecureSkipVerify bool `toml:"insecure_skip_verify"`
 }
 
 type Credential func(string, reference.Spec) (string, string, error)
@@ -66,6 +69,15 @@ func RegistryHostsFromConfig(cfg Config, credsFuncs ...Credential) source.Regist
 		}) {
 			client := rhttp.NewClient()
 			client.Logger = nil // disable logging every request
+			if h.InsecureSkipVerify {
+				client.HTTPClient = &http.Client{
+					Transport: &http.Transport{
+						TLSClientConfig: &tls.Config{
+							InsecureSkipVerify: true,
+						},
+					},
+				}
+			}
 			if h.RequestTimeoutSec >= 0 {
 				if h.RequestTimeoutSec == 0 {
 					client.HTTPClient.Timeout = defaultRequestTimeoutSec * time.Second

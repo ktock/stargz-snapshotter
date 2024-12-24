@@ -110,6 +110,7 @@ func NewFileSystem(ctx context.Context, root string, config *Config, opts ...Opt
 	}
 	// Configure filesystem and snapshotter
 	fsOpts := append(sOpts.fsOpts, stargzfs.WithGetSources(sources(
+		fromLabelsWithAuthStream(config.ContainerdTransferKeychainConfig, resolver.Config(config.ResolverConfig), sOpts.credsFuncs...), // TODO: we should disable this if sOpts.registryHosts != nil because we can't configure these hosts to use stream auth.
 		sourceFromCRILabels(hosts),      // provides source info based on CRI labels
 		source.FromDefaultLabels(hosts), // provides source info based on default labels
 	)),
