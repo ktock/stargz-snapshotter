@@ -380,6 +380,13 @@ func (fs *filesystem) Check(ctx context.Context, mountpoint string, labels map[s
 		return fmt.Errorf("layer not registered")
 	}
 
+	// Ensure the passed labels are consistent with the mounted layer. This prevents
+	// reusing the mounted layer for a snapshot that requires a different TOC.
+	if err := fs.checkTOCDigest(l, labels); err != nil {
+		log.G(ctx).WithError(err).Warn("TOC digest check failed")
+		return err
+	}
+
 	if l.Info().FetchedSize < l.Info().Size {
 		// Image contents hasn't fully cached yet.
 		// Check the blob connectivity and try to refresh the connection on failure
@@ -396,6 +403,31 @@ func (fs *filesystem) Check(ctx context.Context, mountpoint string, labels map[s
 		}
 	}
 
+	return nil
+}
+
+// checkTOCDigest checks if the TOC digest passed through the labels matches to the
+// TOC digest of the layer. snapshot.ErrDeniedLayer is returned on mismatch.
+// The TOC digest is checked even if verification is disabled so that the layer
+// mounted for a TOC digest isn't reused for a snapshot requiring a different one.
+func (fs *filesystem) checkTOCDigest(l layer.Layer, labels map[string]string) error {
+	tocDigest, ok := labels[estargz.TOCJSONDigestAnnotation]
+	if !ok {
+		if fs.disableVerification {
+			return nil
+		}
+		if _, ok := labels[config.TargetSkipVerifyLabel]; ok && fs.allowNoVerification {
+			return nil
+		}
+		return fmt.Errorf("digest of TOC JSON must be passed: %w", snapshot.ErrDeniedLayer)
+	}
+	dgst, err := digest.Parse(tocDigest)
+	if err != nil {
+		return fmt.Errorf("invalid TOC digest %q: %v: %w", tocDigest, err, snapshot.ErrDeniedLayer)
+	}
+	if actual := l.Info().TOCDigest; actual != dgst {
+		return fmt.Errorf("TOC digest %q doesn't match to the layer's TOC digest %q: %w", dgst, actual, snapshot.ErrDeniedLayer)
+	}
 	return nil
 }
 

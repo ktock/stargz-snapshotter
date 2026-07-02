@@ -19,18 +19,24 @@ package commands
 import (
 	"context"
 	"fmt"
+	"os"
 
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/cmd/ctr/commands"
 	"github.com/containerd/containerd/v2/cmd/ctr/commands/content"
+	ctrimages "github.com/containerd/containerd/v2/cmd/ctr/commands/images"
 	"github.com/containerd/containerd/v2/core/images"
 	"github.com/containerd/containerd/v2/core/snapshots"
+	"github.com/containerd/containerd/v2/core/transfer"
+	"github.com/containerd/containerd/v2/core/transfer/image"
+	"github.com/containerd/containerd/v2/core/transfer/registry"
 	ctdsnapshotters "github.com/containerd/containerd/v2/pkg/snapshotters"
 	"github.com/containerd/log"
+	"github.com/containerd/platforms"
 	fsconfig "github.com/containerd/stargz-snapshotter/fs/config"
 	"github.com/containerd/stargz-snapshotter/fs/source"
 	"github.com/containerd/stargz-snapshotter/ipfs"
-	"github.com/containerd/stargz-snapshotter/service/verifier"
+	// "github.com/containerd/stargz-snapshotter/service/verifier"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/urfave/cli/v3"
 )
@@ -63,6 +69,11 @@ command.
 			Name:  "use-containerd-labels",
 			Usage: "Use labels defined in containerd project",
 		},
+		&cli.BoolFlag{
+			Name:  "local",
+			Usage: "Fetch content from local client rather than using transfer service",
+			Value: true,
+		},
 	), commands.SnapshotterFlags...),
 	Action: func(ctx context.Context, context *cli.Command) error {
 		var (
@@ -78,6 +89,10 @@ command.
 			return err
 		}
 		defer cancel()
+
+		if !context.Bool("local") {
+			return transferPull(ctx, client, ref, context)
+		}
 
 		ctx, done, err := client.WithLease(ctx)
 		if err != nil {
@@ -108,13 +123,6 @@ command.
 		config.snapshotter = remoteSnapshotterName
 		if sn := context.String("snapshotter"); sn != "" {
 			config.snapshotter = sn
-		}
-
-		// checks if the TOCDigest consistency between the pulling image and existing images.
-		// When a TOCDigest inconsistency is detected, it returns an error and the user needs
-		// to manually remove the existing invalid images.
-		if err := verifier.VerifyImage(ctx, client, ref, config.Resolver); err != nil {
-			return fmt.Errorf("verification error: %w", err)
 		}
 
 		return pull(ctx, client, ref, config)
@@ -167,4 +175,62 @@ func pull(ctx context.Context, client *containerd.Client, ref string, config *rP
 	}
 
 	return nil
+}
+
+// transferPull pulls the image using the transfer service. Labels for the remote
+// snapshotter are appended by containerd so the snapshotter needs to enable
+// "enable_remote_snapshot_annotations" export and to be configured in the unpack
+// configuration of the transfer service.
+func transferPull(ctx context.Context, client *containerd.Client, ref string, cmd *cli.Command) error {
+	unsupportedFlags := []string{skipContentVerifyOpt, "ipfs", "use-containerd-labels",
+		"max-concurrent-downloads", "skip-verify", "tlscacert", "tlscert", "tlskey", // RegistryFlags
+	}
+	for _, s := range unsupportedFlags {
+		if cmd.IsSet(s) {
+			return fmt.Errorf("\"--%s\" requires \"--local\" flag", s)
+		}
+	}
+
+	ch, err := commands.NewStaticCredentials(ctx, cmd, ref)
+	if err != nil {
+		return err
+	}
+
+	snapshotter := remoteSnapshotterName
+	if sn := cmd.String("snapshotter"); sn != "" {
+		snapshotter = sn
+	}
+	sopts := []image.StoreOpt{
+		image.WithPlatforms(platforms.DefaultSpec()),
+		image.WithUnpack(platforms.DefaultSpec(), snapshotter),
+		image.WithAllMetadata,
+	}
+	if labels := cmd.StringSlice("label"); len(labels) > 0 {
+		sopts = append(sopts, image.WithImageLabels(commands.LabelArgs(labels)))
+	}
+
+	opts := []registry.Opt{
+		registry.WithCredentials(ch),
+		registry.WithHostDir(cmd.String("hosts-dir")),
+	}
+	if cmd.Bool("plain-http") {
+		opts = append(opts, registry.WithDefaultScheme("http"))
+	}
+	logStream := log.G(ctx).Writer()
+	if cmd.Bool("http-dump") {
+		opts = append(opts, registry.WithHTTPDebug(), registry.WithClientStream(logStream))
+	}
+	if cmd.Bool("http-trace") {
+		opts = append(opts, registry.WithHTTPTrace(), registry.WithClientStream(logStream))
+	}
+	reg, err := registry.NewOCIRegistry(ctx, ref, opts...)
+	if err != nil {
+		return err
+	}
+	is := image.NewStore(ref, sopts...)
+
+	pf, done := ctrimages.ProgressHandler(ctx, os.Stdout)
+	defer done()
+
+	return client.Transfer(ctx, reg, is, transfer.WithProgress(pf))
 }

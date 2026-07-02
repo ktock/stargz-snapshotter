@@ -6,3 +6,17 @@ version = 2
     address = "/run/containerd-stargz-grpc/containerd-stargz-grpc.sock"
   [proxy_plugins.stargz.exports]
     root = "/var/lib/containerd-stargz-grpc/"
+    enable_remote_snapshot_annotations = "true"
+
+[plugins."io.containerd.metadata.v1.bolt"]
+  disable_skip_snapshot_preparation = true
+
+[plugins."io.containerd.transfer.v1.local"]
+  [[plugins."io.containerd.transfer.v1.local".unpack_config]]
+    platform = "linux/amd64"
+    snapshotter = "overlayfs"
+    differ = "walking"
+  [[plugins."io.containerd.transfer.v1.local".unpack_config]]
+    platform = "linux/amd64"
+    snapshotter = "stargz"
+    differ = "walking"

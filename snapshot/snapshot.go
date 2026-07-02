@@ -18,6 +18,7 @@ package snapshot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -52,6 +53,10 @@ const (
 	prepareSucceeded     = "true"
 	prepareFailed        = "false"
 )
+
+// ErrDeniedLayer is returned when the layer is inconsistent with the passed labels
+// (e.g. TOC digest mismatch) so it must not be used for the snapshot.
+var ErrDeniedLayer = errors.New("layer denied to prepare")
 
 // FileSystem is a backing filesystem abstraction.
 //
@@ -259,12 +264,31 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 		//       or not, using the key `remoteSnapshotLogKey` defined in the above. This
 		//       log is used by tests in this project.
 		lCtx := log.WithLogger(ctx, log.G(ctx).WithField("key", key).WithField("parent", parent))
-		if err := o.prepareRemoteSnapshot(lCtx, key, base.Labels); err != nil {
+		if err := o.prepareRemoteSnapshot(lCtx, key, base.Labels); errdefs.IsAlreadyExists(err) {
+			// The target snapshot already exists and is consistent with the labels.
+			log.G(lCtx).WithField(remoteSnapshotLogKey, prepareSucceeded).Debug("prepared remote snapshot")
+			return nil, fmt.Errorf("target snapshot %q: %w", target, errdefs.ErrAlreadyExists)
+		} else if err != nil {
 			log.G(lCtx).WithField(remoteSnapshotLogKey, prepareFailed).
 				WithError(err).Warn("failed to prepare remote snapshot")
+			if errors.Is(err, ErrDeniedLayer) {
+				return nil, err
+			}
 		} else {
 			base.Labels[remoteLabel] = remoteLabelVal // Mark this snapshot as remote
 			err := o.commit(ctx, true, target, key, append(opts, snapshots.WithLabels(base.Labels))...)
+			if errdefs.IsAlreadyExists(err) {
+				// The target snapshot has been created by someone else. Ensure that the
+				// existing one is consistent with the labels before reusing it.
+				if cErr := o.checkTargetSnapshot(lCtx, target, base.Labels); cErr != nil {
+					log.G(lCtx).WithField(remoteSnapshotLogKey, prepareFailed).
+						WithError(cErr).Warn("existing target snapshot cannot be reused")
+					if rErr := o.Remove(ctx, key); rErr != nil {
+						log.G(lCtx).WithError(rErr).Warn("failed to remove snapshot")
+					}
+					return nil, cErr
+				}
+			}
 			if err == nil || errdefs.IsAlreadyExists(err) {
 				// count also AlreadyExists as "success"
 				log.G(lCtx).WithField(remoteSnapshotLogKey, prepareSucceeded).Debug("prepared remote snapshot")
@@ -686,7 +710,24 @@ func (o *snapshotter) Close() error {
 
 // prepareRemoteSnapshot tries to prepare the snapshot as a remote snapshot
 // using filesystems registered in this snapshotter.
+// ErrAlreadyExists is returned if the target snapshot already exists and is
+// consistent with the labels.
 func (o *snapshotter) prepareRemoteSnapshot(ctx context.Context, key string, labels map[string]string) error {
+	// If the target snapshot already exists, try to reuse it without mounting the
+	// layer again. This is an optimization only; concurrent Prepare calls for the
+	// same target aren't detected here and the consistency check is done again on
+	// commit.
+	if target, ok := labels[targetSnapshotLabel]; ok {
+		err := o.checkTargetSnapshot(ctx, target, labels)
+		if err == nil {
+			return fmt.Errorf("target snapshot %q: %w", target, errdefs.ErrAlreadyExists)
+		} else if errors.Is(err, ErrDeniedLayer) {
+			return err
+		} else if !errdefs.IsNotFound(err) {
+			log.G(ctx).WithError(err).Debug("failed to check existing target snapshot; preparing new one")
+		}
+	}
+
 	ctx, t, err := o.ms.TransactionContext(ctx, false)
 	if err != nil {
 		return err
@@ -701,6 +742,30 @@ func (o *snapshotter) prepareRemoteSnapshot(ctx context.Context, key string, lab
 	log.G(ctx).Infof("preparing filesystem mount at mountpoint=%v", mountpoint)
 
 	return o.fs.Mount(ctx, mountpoint, labels)
+}
+
+// checkTargetSnapshot checks if the existing target snapshot is consistent with
+// the labels so that it can be reused. If the target is a remote snapshot, the
+// filesystem checks the labels (e.g. TOC digest) against the mounted layer and
+// ErrDeniedLayer is returned on mismatch. Normal snapshots are always reusable
+// because their contents are verified by containerd on unpack.
+func (o *snapshotter) checkTargetSnapshot(ctx context.Context, target string, labels map[string]string) error {
+	ctx, t, err := o.ms.TransactionContext(ctx, false)
+	if err != nil {
+		return err
+	}
+	id, info, _, err := storage.GetInfo(ctx, target)
+	t.Rollback()
+	if err != nil {
+		return err
+	}
+	if _, ok := info.Labels[remoteLabel]; !ok {
+		return nil
+	}
+	if err := o.fs.Check(ctx, o.upperPath(id), labels); err != nil {
+		return fmt.Errorf("failed to check target snapshot %q: %w", target, err)
+	}
+	return nil
 }
 
 // checkAvailability checks avaiability of the specified layer and all lower

@@ -24,15 +24,18 @@ package fs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/containerd/containerd/v2/core/remotes/docker"
 	"github.com/containerd/containerd/v2/pkg/reference"
+	"github.com/containerd/stargz-snapshotter/estargz"
 	"github.com/containerd/stargz-snapshotter/fs/layer"
 	"github.com/containerd/stargz-snapshotter/fs/remote"
 	"github.com/containerd/stargz-snapshotter/fs/source"
+	"github.com/containerd/stargz-snapshotter/snapshot"
 	"github.com/containerd/stargz-snapshotter/task"
 	fusefs "github.com/hanwen/go-fuse/v2/fs"
 	digest "github.com/opencontainers/go-digest"
@@ -40,7 +43,8 @@ import (
 )
 
 func TestCheck(t *testing.T) {
-	bl := &breakableLayer{}
+	tocDigest := digest.FromString("toc")
+	bl := &breakableLayer{tocDigest: tocDigest}
 	fs := &filesystem{
 		layer: map[string]layer.Layer{
 			"test": bl,
@@ -50,24 +54,38 @@ func TestCheck(t *testing.T) {
 			return docker.ConfigureDefaultRegistries(docker.WithPlainHTTP(docker.MatchLocalhost))(refspec.Hostname())
 		}),
 	}
+	labels := map[string]string{estargz.TOCJSONDigestAnnotation: tocDigest.String()}
 	bl.success = true
-	if err := fs.Check(context.TODO(), "test", nil); err != nil {
+	if err := fs.Check(context.TODO(), "test", labels); err != nil {
 		t.Errorf("connection failed; wanted to succeed: %v", err)
 	}
 
 	bl.success = false
-	if err := fs.Check(context.TODO(), "test", nil); err == nil {
+	if err := fs.Check(context.TODO(), "test", labels); err == nil {
 		t.Errorf("connection succeeded; wanted to fail")
+	}
+
+	bl.success = true
+	for _, l := range []map[string]string{
+		{estargz.TOCJSONDigestAnnotation: digest.FromString("invalid").String()},
+		{estargz.TOCJSONDigestAnnotation: "invalid"},
+		nil,
+	} {
+		if err := fs.Check(context.TODO(), "test", l); !errors.Is(err, snapshot.ErrDeniedLayer) {
+			t.Errorf("check with labels %v must be denied but got: %v", l, err)
+		}
 	}
 }
 
 type breakableLayer struct {
-	success bool
+	success   bool
+	tocDigest digest.Digest
 }
 
 func (l *breakableLayer) Info() layer.Info {
 	return layer.Info{
-		Size: 1,
+		Size:      1,
+		TOCDigest: l.tocDigest,
 	}
 }
 func (l *breakableLayer) RootNode(uint32) (fusefs.InodeEmbedder, error) { return nil, nil }

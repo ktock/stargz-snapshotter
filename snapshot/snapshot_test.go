@@ -19,9 +19,11 @@ package snapshot
 import (
 	"context"
 	_ "crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"testing"
 
@@ -100,6 +102,118 @@ func TestRemotePrepare(t *testing.T) {
 	if label, ok := info.Labels[targetSnapshotLabel]; !ok || label != target {
 		t.Errorf("remote snapshot hasn't valid remote label: %q", label)
 	}
+}
+
+func TestRemotePrepareTOCDigestConsistency(t *testing.T) {
+	const (
+		target     = "testTarget"
+		tocLabel   = "test/toc.digest"
+		tocDigest1 = "toc1"
+		tocDigest2 = "toc2"
+	)
+	labelsWithTOC := func(toc string) map[string]string {
+		return map[string]string{targetSnapshotLabel: target, tocLabel: toc}
+	}
+	newTestSnapshotter := func(t *testing.T) (snapshots.Snapshotter, *tocCheckFs) {
+		fs := &tocCheckFs{tocLabel: tocLabel, mounted: make(map[string]string)}
+		sn, err := NewSnapshotter(context.TODO(), t.TempDir(), fs, NoRestore)
+		if err != nil {
+			t.Fatalf("failed to make new remote snapshotter: %q", err)
+		}
+		t.Cleanup(func() { sn.Close() })
+		return sn, fs
+	}
+
+	t.Run("existing target", func(t *testing.T) {
+		ctx := context.TODO()
+		sn, fs := newTestSnapshotter(t)
+		if _, err := sn.Prepare(ctx, "key1", "", snapshots.WithLabels(labelsWithTOC(tocDigest1))); !errdefs.IsAlreadyExists(err) {
+			t.Fatalf("failed to prepare remote snapshot: %v", err)
+		}
+
+		// The existing target must not be reused for the inconsistent TOC digest.
+		if _, err := sn.Prepare(ctx, "key2", "", snapshots.WithLabels(labelsWithTOC(tocDigest2))); !errors.Is(err, ErrDeniedLayer) {
+			t.Fatalf("prepare with inconsistent TOC digest must be denied: %v", err)
+		}
+
+		// The existing target can be reused for the consistent TOC digest without mounting.
+		if _, err := sn.Prepare(ctx, "key3", "", snapshots.WithLabels(labelsWithTOC(tocDigest1))); !errdefs.IsAlreadyExists(err) {
+			t.Fatalf("prepare with consistent TOC digest must succeed: %v", err)
+		}
+		if fs.mountNum != 1 {
+			t.Errorf("layer must be mounted once but mounted %d times", fs.mountNum)
+		}
+	})
+
+	for _, tt := range []struct {
+		name    string
+		toc     string
+		wantErr error
+	}{
+		{name: "consistent target on commit", toc: tocDigest1, wantErr: errdefs.ErrAlreadyExists},
+		{name: "inconsistent target on commit", toc: tocDigest2, wantErr: ErrDeniedLayer},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.TODO()
+			sn, fs := newTestSnapshotter(t)
+			if _, err := sn.Prepare(ctx, "key1", "", snapshots.WithLabels(labelsWithTOC(tocDigest1))); !errdefs.IsAlreadyExists(err) {
+				t.Fatalf("failed to prepare remote snapshot: %v", err)
+			}
+
+			// Let the check before mounting fail so that the existing target is detected on commit.
+			fs.checkErrNum = 1
+			if _, err := sn.Prepare(ctx, "key2", "", snapshots.WithLabels(labelsWithTOC(tt.toc))); !errors.Is(err, tt.wantErr) {
+				t.Fatalf("got error %v; want %v", err, tt.wantErr)
+			}
+			if fs.mountNum != 2 {
+				t.Errorf("layer must be mounted twice but mounted %d times", fs.mountNum)
+			}
+			if tt.wantErr == ErrDeniedLayer {
+				if _, err := sn.Stat(ctx, "key2"); !errdefs.IsNotFound(err) {
+					t.Errorf("denied snapshot must be removed: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// tocCheckFs is a FileSystem that records the TOC digest of each mountpoint
+// without actually mounting anything.
+type tocCheckFs struct {
+	tocLabel    string
+	mounted     map[string]string
+	mountNum    int
+	checkErrNum int
+	mu          sync.Mutex
+}
+
+func (fs *tocCheckFs) Mount(ctx context.Context, mountpoint string, labels map[string]string) error {
+	fs.mu.Lock()
+	fs.mounted[mountpoint] = labels[fs.tocLabel]
+	fs.mountNum++
+	fs.mu.Unlock()
+	return nil
+}
+
+func (fs *tocCheckFs) Check(ctx context.Context, mountpoint string, labels map[string]string) error {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	if fs.checkErrNum > 0 {
+		fs.checkErrNum--
+		return fmt.Errorf("temporary failure")
+	}
+	toc, ok := fs.mounted[mountpoint]
+	if !ok {
+		return fmt.Errorf("layer not registered")
+	}
+	if toc != labels[fs.tocLabel] {
+		return fmt.Errorf("TOC digest mismatch: %w", ErrDeniedLayer)
+	}
+	return nil
+}
+
+func (fs *tocCheckFs) Unmount(ctx context.Context, mountpoint string) error {
+	return nil
 }
 
 func TestRemoteOverlay(t *testing.T) {
