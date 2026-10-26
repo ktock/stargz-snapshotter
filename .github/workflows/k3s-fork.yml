@@ -1,0 +1,35 @@
+name: K3S (fork)
+on:
+  push:
+  workflow_dispatch:
+
+env:
+  DOCKER_BUILDKIT: 1
+
+jobs:
+  test-k3s:
+    if: github.repository != 'containerd/stargz-snapshotter'
+    runs-on: ubuntu-24.04
+    name: K3S (attempt ${{ matrix.attempt }})
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        attempt: [1, 2, 3, 4, 5]
+    steps:
+    - uses: actions/setup-go@v7
+      with:
+        go-version: '1.27'
+        check-latest: true
+    - name: Install k3d
+      run: |
+        wget -q -O - https://raw.githubusercontent.com/rancher/k3d/v5.8.3/install.sh | bash
+    - name: Install htpasswd for setting up private registry
+      run: sudo apt-get update -y && sudo apt-get --no-install-recommends install -y apache2-utils
+    - name: Install yq
+      run: |
+        sudo wget -O /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.9.3/yq_linux_amd64
+        sudo chmod +x /usr/local/bin/yq
+    - uses: actions/checkout@v7
+    - name: Run test with k3s
+      run: make test-k3s
